@@ -1,0 +1,12 @@
+[package]
+name = "rust-rocq"
+version = "0.1.0"
+edition = "2021"
+description = "Translates Rust MIR into Rocq"
+
+[[bin]]
+name = "rust-rocq"
+path = "src/main.rs"
+
+[profile.release]
+debug = true
