@@ -1,0 +1,13 @@
+/target
+**/*.rs.bk
+
+*.vo
+*.vok
+*.vos
+*.glob
+*.aux
+.lia.cache
+_RocqProject
+_CoqProject
+
+/out
