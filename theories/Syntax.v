@@ -18,10 +18,16 @@ Inductive float_width := FW16 | FW32 | FW64 | FW128.
 Inductive mutability := Mut | Imm.
 Inductive safety := Safe | Unsafe.
 
+Inductive bound_depth := BdIndex (n : nat) | BdCanonical.
+
 Inductive region :=
   | RVar (n : nat)
+  | RParam (idx : nat) (nm : name)
+  | RBound (depth : bound_depth) (idx : nat)
+  | RPlaceholder (univ : nat) (idx : nat)
   | RStatic
-  | RErased.
+  | RErased
+  | RError (msg : name).
 
 Inductive alias_kind := AkProjection | AkInherent | AkOpaque | AkFree.
 
@@ -51,7 +57,7 @@ Inductive ty :=
   | TTuple (elems : list ty)
   | TAlias (k : alias_kind) (path : name) (args : list garg)
   | TParam (idx : nat) (nm : name)
-  | TBound (depth : nat) (idx : nat)
+  | TBound (depth : bound_depth) (idx : nat)
   | TPlaceholder (univ : nat) (idx : nat)
   | TError (msg : name)
 
@@ -59,7 +65,7 @@ with tconst :=
   | CParam (idx : nat) (nm : name)
   | CValue (t : ty) (bits : Z)
   | CUnevaluated (path : name) (args : list garg)
-  | CBound (depth : nat) (idx : nat)
+  | CBound (depth : bound_depth) (idx : nat)
   | CError (msg : name)
 
 with garg :=

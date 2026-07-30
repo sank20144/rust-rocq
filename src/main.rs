@@ -9,8 +9,11 @@ extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_session;
 extern crate rustc_span;
+extern crate rustc_type_ir;
 
+mod rocq;
 mod store;
+mod ty;
 
 use std::process::ExitCode;
 
