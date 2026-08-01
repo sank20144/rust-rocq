@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::collections::BTreeSet;
+
 use rustc_middle::ty::{self, Ty, TyCtxt, ValTreeKindExt as _};
 use rustc_type_ir::{ConstKind, RegionKind, TyKind, UnevaluatedConstKind};
 use rustc_span::Span;
@@ -6,11 +9,17 @@ use crate::rocq::{self, Term};
 
 pub struct Cx<'tcx> {
     pub tcx: TyCtxt<'tcx>,
+    regions: RefCell<BTreeSet<u32>>,
 }
 
 impl<'tcx> Cx<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
-        Cx { tcx }
+        Cx { tcx, regions: RefCell::new(BTreeSet::new()) }
+    }
+
+    pub fn take_regions(&self) -> Vec<u64> {
+        let taken = std::mem::take(&mut *self.regions.borrow_mut());
+        taken.into_iter().map(u64::from).collect()
     }
 
     pub fn path(&self, def_id: rustc_hir::def_id::DefId) -> Term {
@@ -148,7 +157,10 @@ impl<'tcx> Cx<'tcx> {
     pub fn region(&self, r: ty::Region<'tcx>) -> Term {
         use RegionKind::*;
         match r.kind() {
-            ReVar(vid) => rocq::app("RVar", vec![rocq::nat(vid.as_u32() as u64)]),
+            ReVar(vid) => {
+                self.regions.borrow_mut().insert(vid.as_u32());
+                rocq::app("RVar", vec![rocq::nat(vid.as_u32() as u64)])
+            }
             ReEarlyParam(p) => rocq::app(
                 "RParam",
                 vec![rocq::nat(p.index as u64), rocq::string(p.name.to_string())],

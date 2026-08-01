@@ -120,10 +120,13 @@ Record const_op := ConstOp {
   co_const : constant;
 }.
 
+Inductive runtime_check := RcUbChecks | RcContractChecks | RcOverflowChecks.
+
 Inductive operand :=
   | OCopy (p : place)
   | OMove (p : place)
-  | OConst (c : const_op).
+  | OConst (c : const_op)
+  | ORuntimeCheck (c : runtime_check).
 
 Inductive fake_borrow_kind := FbShallow | FbDeep.
 Inductive mut_borrow_kind := MbDefault | MbTwoPhase | MbClosureCapture.
