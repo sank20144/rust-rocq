@@ -124,7 +124,29 @@ impl<'tcx> Cx<'tcx> {
             ty::ClauseKind::TypeOutlives(o) => {
                 rocq::app("BdTyOutlives", vec![self.ty(o.0), self.region(o.1)])
             }
-            other => rocq::app("BdOther", vec![rocq::string(format!("{other:?}"))]),
+            ty::ClauseKind::ConstArgHasType(c, t) => {
+                rocq::app("BdConstArgHasType", vec![self.tconst(c), self.ty(t)])
+            }
+            ty::ClauseKind::WellFormed(term) => match term.kind() {
+                ty::TermKind::Ty(t) => rocq::app("BdWellFormedTy", vec![self.ty(t)]),
+                ty::TermKind::Const(c) => {
+                    rocq::app("BdWellFormedConst", vec![self.tconst(c)])
+                }
+            },
+            ty::ClauseKind::ConstEvaluatable(c) => {
+                rocq::app("BdConstEvaluatable", vec![self.tconst(c)])
+            }
+            ty::ClauseKind::HostEffect(h) => rocq::app(
+                "BdHostEffect",
+                vec![
+                    self.path(h.trait_ref.def_id),
+                    self.generic_args(h.trait_ref.args),
+                    rocq::string(format!("{:?}", h.constness)),
+                ],
+            ),
+            ty::ClauseKind::UnstableFeature(sym) => {
+                rocq::app("BdUnstableFeature", vec![rocq::string(sym.to_string())])
+            }
         }
     }
 

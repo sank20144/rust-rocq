@@ -323,7 +323,12 @@ Inductive bound :=
   | BdProjection (path : name) (args : list garg) (t : ty)
   | BdOutlives (a : region) (b : region)
   | BdTyOutlives (t : ty) (r : region)
-  | BdOther (descr : name).
+  | BdConstArgHasType (c : tconst) (t : ty)
+  | BdWellFormedTy (t : ty)
+  | BdWellFormedConst (c : tconst)
+  | BdConstEvaluatable (c : tconst)
+  | BdHostEffect (path : name) (args : list garg) (constness : name)
+  | BdUnstableFeature (feature : name).
 
 Record body := Body {
   bd_name : name;
