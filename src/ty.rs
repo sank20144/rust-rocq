@@ -10,11 +10,12 @@ use crate::rocq::{self, Term};
 pub struct Cx<'tcx> {
     pub tcx: TyCtxt<'tcx>,
     regions: RefCell<BTreeSet<u32>>,
+    file: RefCell<String>,
 }
 
 impl<'tcx> Cx<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
-        Cx { tcx, regions: RefCell::new(BTreeSet::new()) }
+        Cx { tcx, regions: RefCell::new(BTreeSet::new()), file: RefCell::new(String::new()) }
     }
 
     pub fn take_regions(&self) -> Vec<u64> {
@@ -24,6 +25,22 @@ impl<'tcx> Cx<'tcx> {
 
     pub fn path(&self, def_id: rustc_hir::def_id::DefId) -> Term {
         rocq::string(self.tcx.def_path_str(def_id))
+    }
+
+    pub fn set_file(&self, file: String) {
+        *self.file.borrow_mut() = file;
+    }
+
+    pub fn file(&self) -> String {
+        self.file.borrow().clone()
+    }
+
+    pub fn span_file(&self, span: Span) -> String {
+        let sm = self.tcx.sess.source_map();
+        match sm.lookup_line(span.lo()) {
+            Ok(lo) => sm.filename_for_diagnostics(&lo.sf.name).to_string(),
+            Err(_) => String::new(),
+        }
     }
 
     pub fn span(&self, span: Span) -> Term {
@@ -38,18 +55,18 @@ impl<'tcx> Cx<'tcx> {
             return rocq::atom("NoSpan");
         };
         let file = sm.filename_for_diagnostics(&lo.sf.name).to_string();
-        let lo_col = sm.lookup_char_pos(span.lo()).col_display;
-        let hi_col = sm.lookup_char_pos(span.hi()).col_display;
-        rocq::app(
-            "Span",
-            vec![
-                rocq::string(file),
-                rocq::nat(lo.line as u64 + 1),
-                rocq::nat(lo_col as u64),
-                rocq::nat(hi.line as u64 + 1),
-                rocq::nat(hi_col as u64),
-            ],
-        )
+        let mut args = vec![
+            rocq::nat(lo.line as u64 + 1),
+            rocq::nat(sm.lookup_char_pos(span.lo()).col_display as u64),
+            rocq::nat(hi.line as u64 + 1),
+            rocq::nat(sm.lookup_char_pos(span.hi()).col_display as u64),
+        ];
+        if file == *self.file.borrow() {
+            rocq::app("Span", args)
+        } else {
+            args.insert(0, rocq::string(file));
+            rocq::app("SpanIn", args)
+        }
     }
 
     pub fn ty(&self, t: Ty<'tcx>) -> Term {

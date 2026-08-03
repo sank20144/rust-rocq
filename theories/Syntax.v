@@ -10,7 +10,8 @@ Definition field := nat.
 Definition variant := nat.
 
 Inductive span :=
-  | Span (file : name) (lo_line lo_col hi_line hi_col : nat)
+  | Span (lo_line lo_col hi_line hi_col : nat)
+  | SpanIn (file : name) (lo_line lo_col hi_line hi_col : nat)
   | NoSpan.
 
 Inductive int_width := W8 | W16 | W32 | W64 | W128 | WSize.
@@ -360,6 +361,7 @@ Record facts := Facts {
 
 Record body := Body {
   bd_name : name;
+  bd_file : name;
   bd_span : span;
   bd_generics : list generic_param;
   bd_bounds : list bound;

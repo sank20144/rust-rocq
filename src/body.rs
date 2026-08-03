@@ -15,13 +15,18 @@ impl<'tcx> Cx<'tcx> {
         body: &mir::Body<'tcx>,
         facts: Term,
     ) -> Term {
+        self.set_file(self.span_file(body.span));
         let names = debug_names(body);
 
         let locals: Vec<Term> = body
             .local_decls
             .iter_enumerated()
             .map(|(local, decl)| {
-                rocq::app(
+                let label = match names.get(&local) {
+                    Some(n) => format!("_{} {n}", local.as_u32()),
+                    None => format!("_{}", local.as_u32()),
+                };
+                rocq::note(label, rocq::app(
                     "LocalDecl",
                     vec![
                         self.ty(decl.ty),
@@ -29,7 +34,7 @@ impl<'tcx> Cx<'tcx> {
                         rocq::option(names.get(&local).map(|n| rocq::string(n.clone()))),
                         self.span(decl.source_info.span),
                     ],
-                )
+                ))
             })
             .collect();
 
@@ -37,7 +42,12 @@ impl<'tcx> Cx<'tcx> {
             .basic_blocks
             .iter_enumerated()
             .map(|(bb, data)| {
-                rocq::app(
+                let label = if data.is_cleanup {
+                    format!("bb{} (cleanup)", bb.as_u32())
+                } else {
+                    format!("bb{}", bb.as_u32())
+                };
+                rocq::note(label, rocq::app(
                     "BasicBlock",
                     vec![
                         rocq::nat(bb.as_u32() as u64),
@@ -51,22 +61,26 @@ impl<'tcx> Cx<'tcx> {
                         },
                         rocq::boolean(data.is_cleanup),
                     ],
-                )
+                ))
             })
             .collect();
 
         rocq::app(
             "Body",
             vec![
-                rocq::string(name),
-                self.span(body.span),
-                self.generics(def_id),
-                self.bounds(def_id),
-                rocq::nat(body.arg_count as u64),
-                rocq::list(locals),
-                rocq::list(blocks),
-                rocq::list(self.take_regions().into_iter().map(rocq::nat).collect()),
-                facts,
+                rocq::note("name", rocq::string(name)),
+                rocq::note("file", rocq::string(self.file())),
+                rocq::note("span", self.span(body.span)),
+                rocq::note("generics", self.generics(def_id)),
+                rocq::note("bounds", self.bounds(def_id)),
+                rocq::note("args", rocq::nat(body.arg_count as u64)),
+                rocq::note("locals", rocq::list(locals)),
+                rocq::note("blocks", rocq::list(blocks)),
+                rocq::note(
+                    "regions",
+                    rocq::list(self.take_regions().into_iter().map(rocq::nat).collect()),
+                ),
+                rocq::note("polonius", facts),
             ],
         )
     }

@@ -4,12 +4,13 @@ Import ListNotations.
 
 Local Open Scope string_scope.
 
-Definition sp := Span "tests/simple.rs" 1 0 3 1.
+Definition sp := Span 1 0 3 1.
 
 Definition l (n : nat) : place := Place n [].
 
 Definition add_body : body := Body
         "add"
+        "tests/inputs/simple.rs"
         sp
     []
       []
