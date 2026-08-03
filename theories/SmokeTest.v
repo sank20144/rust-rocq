@@ -35,7 +35,8 @@ Definition add_body : body := Body
       (Term sp TReturn)
       false
   ]
-   [].
+   []
+     (Facts [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] [] []).
 
 Example add_has_two_blocks : length (bd_blocks add_body) = 2.
 Proof. reflexivity. Qed.

@@ -330,6 +330,34 @@ Inductive bound :=
   | BdHostEffect (path : name) (args : list garg) (constness : name)
   | BdUnstableFeature (feature : name).
 
+Definition origin := nat.
+Definition loan := nat.
+Definition move_path := nat.
+
+Inductive point :=
+  | PtStart (b : block_id) (stmt : nat)
+  | PtMid (b : block_id) (stmt : nat).
+
+Record facts := Facts {
+  fa_universal_region : list origin;
+  fa_placeholder : list (origin * loan);
+  fa_known_placeholder_subset : list (origin * origin);
+  fa_loan_issued_at : list (origin * loan * point);
+  fa_loan_killed_at : list (loan * point);
+  fa_loan_invalidated_at : list (point * loan);
+  fa_subset_base : list (origin * origin * point);
+  fa_var_used_at : list (local * point);
+  fa_var_defined_at : list (local * point);
+  fa_var_dropped_at : list (local * point);
+  fa_use_of_var_derefs_origin : list (local * origin);
+  fa_drop_of_var_derefs_origin : list (local * origin);
+  fa_child_path : list (move_path * move_path);
+  fa_path_is_var : list (move_path * local);
+  fa_path_assigned_at_base : list (move_path * point);
+  fa_path_moved_at_base : list (move_path * point);
+  fa_path_accessed_at_base : list (move_path * point);
+}.
+
 Record body := Body {
   bd_name : name;
   bd_span : span;
@@ -338,5 +366,6 @@ Record body := Body {
   bd_arg_count : nat;
   bd_locals : list local_decl;
   bd_blocks : list basic_block;
-  bd_regions : list nat;
+  bd_regions : list origin;
+  bd_facts : facts;
 }.

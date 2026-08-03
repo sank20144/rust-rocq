@@ -13,6 +13,7 @@ extern crate rustc_type_ir;
 
 mod body;
 mod emit;
+mod polonius;
 mod rocq;
 mod store;
 mod ty;
@@ -47,11 +48,11 @@ impl rustc_driver::Callbacks for Frontend {
                 continue;
             };
             let name = tcx.def_path_str(def_id);
-            out.push(name.clone(), cx.body(def_id.to_def_id(), &name, &facts.body));
+            out.push(name.clone(), cx.body(def_id.to_def_id(), &name, &facts.body, polonius::facts(facts)));
 
             for (idx, promoted) in facts.promoted.iter_enumerated() {
                 let pname = format!("{name}::promoted[{}]", idx.as_u32());
-                out.push(pname.clone(), cx.body(def_id.to_def_id(), &pname, promoted));
+                out.push(pname.clone(), cx.body(def_id.to_def_id(), &pname, promoted, polonius::empty_facts()));
             }
         }
 

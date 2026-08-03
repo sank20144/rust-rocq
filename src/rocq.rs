@@ -8,7 +8,7 @@ pub enum Term {
     Nat(u128),
     Int(i128),
     Bool(bool),
-    Pair(Box<Term>, Box<Term>),
+    Tuple(Vec<Term>),
 }
 
 pub fn atom(s: impl Into<String>) -> Term {
@@ -45,7 +45,11 @@ pub fn list(items: Vec<Term>) -> Term {
 }
 
 pub fn pair(a: Term, b: Term) -> Term {
-    Term::Pair(Box::new(a), Box::new(b))
+    Term::Tuple(vec![a, b])
+}
+
+pub fn triple(a: Term, b: Term, c: Term) -> Term {
+    Term::Tuple(vec![a, b, c])
 }
 
 pub fn option(t: Option<Term>) -> Term {
@@ -110,11 +114,14 @@ impl Term {
                 }
             }
             Term::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-            Term::Pair(a, b) => {
+            Term::Tuple(items) => {
                 out.push('(');
-                a.write(out, false);
-                out.push_str(", ");
-                b.write(out, false);
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    item.write(out, false);
+                }
                 out.push(')');
             }
         }
@@ -140,6 +147,11 @@ mod tests {
     #[test]
     fn quotes_are_doubled() {
         assert_eq!(string("a\"b").render(), "\"a\"\"b\"");
+    }
+
+    #[test]
+    fn triples_nest_to_the_left_like_rocq_does() {
+        assert_eq!(triple(nat(1u32), nat(2u32), nat(3u32)).render(), "(1%nat, 2%nat, 3%nat)");
     }
 
     #[test]

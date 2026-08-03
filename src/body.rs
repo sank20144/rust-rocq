@@ -8,7 +8,13 @@ use crate::rocq::{self, Term};
 use crate::ty::{mutability, Cx};
 
 impl<'tcx> Cx<'tcx> {
-    pub fn body(&self, def_id: DefId, name: &str, body: &mir::Body<'tcx>) -> Term {
+    pub fn body(
+        &self,
+        def_id: DefId,
+        name: &str,
+        body: &mir::Body<'tcx>,
+        facts: Term,
+    ) -> Term {
         let names = debug_names(body);
 
         let locals: Vec<Term> = body
@@ -60,6 +66,7 @@ impl<'tcx> Cx<'tcx> {
                 rocq::list(locals),
                 rocq::list(blocks),
                 rocq::list(self.take_regions().into_iter().map(rocq::nat).collect()),
+                facts,
             ],
         )
     }
