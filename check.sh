@@ -32,7 +32,7 @@ for input in tests/inputs/*.rs; do
         continue
     fi
 
-    if ! rocq compile -Q theories RustRocq "$generated" 2>"$out.err"; then
+    if ! rocq compile -Q theories RustRocq -Q "$out/$name" Generated "$generated" 2>"$out.err"; then
         echo "FAIL (rocq)"
         head -20 "$out.err"
         fail=1
@@ -43,6 +43,16 @@ for input in tests/inputs/*.rs; do
     lines=$(wc -c <"$generated")
     echo "ok  ${lines} bytes, ${holes} unrepresented"
 done
+
+printf '%-12s ' "instantiate"
+if rocq compile -Q theories RustRocq -Q "$out/coverage" Generated \
+       tests/instantiation.v 2>"$out.err"; then
+    echo "ok"
+else
+    echo "FAIL"
+    head -20 "$out.err"
+    fail=1
+fi
 
 rm -f "$out.err"
 exit $fail

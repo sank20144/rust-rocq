@@ -85,7 +85,7 @@ impl<'tcx> Cx<'tcx> {
         )
     }
 
-    fn generics(&self, def_id: DefId) -> Term {
+    pub fn generics(&self, def_id: DefId) -> Term {
         let generics = self.tcx.generics_of(def_id);
         rocq::list(
             generics
@@ -109,7 +109,7 @@ impl<'tcx> Cx<'tcx> {
         )
     }
 
-    fn bounds(&self, def_id: DefId) -> Term {
+    pub fn bounds(&self, def_id: DefId) -> Term {
         rocq::list(
             self.tcx
                 .predicates_of(def_id)

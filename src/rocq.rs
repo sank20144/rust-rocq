@@ -68,8 +68,12 @@ pub fn note(label: impl Into<String>, t: Term) -> Term {
 
 impl Term {
     pub fn render(&self) -> String {
+        self.render_at(0)
+    }
+
+    pub fn render_at(&self, indent: usize) -> String {
         let mut out = String::new();
-        self.write(&mut out, 0, false);
+        self.write(&mut out, indent, false);
         out
     }
 

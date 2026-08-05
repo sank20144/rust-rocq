@@ -331,6 +331,35 @@ Inductive bound :=
   | BdHostEffect (path : name) (args : list garg) (constness : name)
   | BdUnstableFeature (feature : name).
 
+Inductive assoc_kind :=
+  | AiFn (has_self : bool)
+  | AiConst
+  | AiType.
+
+Record assoc_item := AssocItem {
+  ai_name : name;
+  ai_path : name;
+  ai_kind : assoc_kind;
+  ai_has_default : bool;
+}.
+
+Record trait_def := TraitDef {
+  tr_path : name;
+  tr_generics : list generic_param;
+  tr_bounds : list bound;
+  tr_items : list assoc_item;
+}.
+
+Record impl_def := ImplDef {
+  ip_path : name;
+  ip_trait : name;
+  ip_args : list garg;
+  ip_generics : list generic_param;
+  ip_bounds : list bound;
+  ip_items : list (name * name);
+  ip_negative : bool;
+}.
+
 Definition origin := nat.
 Definition loan := nat.
 Definition move_path := nat.

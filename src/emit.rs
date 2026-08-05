@@ -5,22 +5,29 @@ use crate::rocq::Term;
 pub struct Output {
     pub dir: PathBuf,
     entries: Vec<(String, Term)>,
+    traits: Vec<Term>,
+    impls: Vec<Term>,
 }
 
 impl Output {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Output { dir: dir.into(), entries: Vec::new() }
+        Output { dir: dir.into(), entries: Vec::new(), traits: Vec::new(), impls: Vec::new() }
     }
 
     pub fn push(&mut self, name: String, body: Term) {
         self.entries.push((name, body));
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+    pub fn set_items(&mut self, traits: Vec<Term>, impls: Vec<Term>) {
+        self.traits = traits;
+        self.impls = impls;
     }
 
-    pub fn write(&self, crate_name: &str, source: &str) -> std::io::Result<PathBuf> {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty() && self.traits.is_empty() && self.impls.is_empty()
+    }
+
+    pub fn write(mut self, crate_name: &str, source: &str) -> std::io::Result<PathBuf> {
         std::fs::create_dir_all(&self.dir)?;
         let path = self.dir.join(format!("{}.v", ident(crate_name)));
 
@@ -33,10 +40,21 @@ impl Output {
              Local Open Scope string_scope.\n\n"
         ));
 
+        let traits = Term::List(std::mem::take(&mut self.traits));
+        let impls = Term::List(std::mem::take(&mut self.impls));
+        out.push_str(&format!(
+            "Definition traits : list trait_def :=\n  {}.\n\n",
+            traits.render_at(2)
+        ));
+        out.push_str(&format!(
+            "Definition impls : list impl_def :=\n  {}.\n\n",
+            impls.render_at(2)
+        ));
+
         let mut idents = Vec::new();
         for (name, body) in &self.entries {
             let id = unique(&ident(name), &idents);
-            out.push_str(&format!("Definition {id} : body :=\n  {}.\n\n", body.render()));
+            out.push_str(&format!("Definition {id} : body :=\n  {}.\n\n", body.render_at(2)));
             idents.push(id);
         }
 

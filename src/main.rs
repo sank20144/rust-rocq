@@ -13,6 +13,7 @@ extern crate rustc_type_ir;
 
 mod body;
 mod emit;
+mod items;
 mod polonius;
 mod rocq;
 mod store;
@@ -42,6 +43,9 @@ impl rustc_driver::Callbacks for Frontend {
     ) -> Compilation {
         let cx = ty::Cx::new(tcx);
         let mut out = emit::Output::new(&self.out_dir);
+
+        let (traits, impls) = items::collect(&cx);
+        out.set_items(traits, impls);
 
         for def_id in store::collected() {
             let Some(facts) = store::retrieve(tcx, def_id) else {

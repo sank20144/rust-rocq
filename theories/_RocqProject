@@ -1,4 +1,6 @@
 -Q . RustRocq
 
 Syntax.v
+Subst.v
 SmokeTest.v
+SubstTest.v

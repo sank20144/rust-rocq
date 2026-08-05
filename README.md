@@ -22,8 +22,11 @@ return, rustc's drop elaboration is not part of the trusted base.
 ## Layout
 
     src/          rustc driver and the MIR to Rocq translation
-    theories/     the Rocq syntax layer
-    tests/        Rust inputs and their expected Rocq output
+    theories/     the Rocq syntax layer and generic instantiation
+    tests/        Rust inputs, and Rocq checks over the translation of them
+
+`./check.sh` translates every input under `tests/inputs` and checks the Rocq it
+produces type-checks.
 
 ## Building
 
