@@ -7,15 +7,26 @@ pub struct Output {
     entries: Vec<(String, Term)>,
     traits: Vec<Term>,
     impls: Vec<Term>,
+    mir: String,
 }
 
 impl Output {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Output { dir: dir.into(), entries: Vec::new(), traits: Vec::new(), impls: Vec::new() }
+        Output {
+            dir: dir.into(),
+            entries: Vec::new(),
+            traits: Vec::new(),
+            impls: Vec::new(),
+            mir: String::new(),
+        }
     }
 
     pub fn push(&mut self, name: String, body: Term) {
         self.entries.push((name, body));
+    }
+
+    pub fn push_mir(&mut self, name: &str, mir: String) {
+        self.mir.push_str(&format!("// ---- {name} ----\n{mir}\n"));
     }
 
     pub fn set_items(&mut self, traits: Vec<Term>, impls: Vec<Term>) {
@@ -64,6 +75,18 @@ impl Output {
         ));
 
         std::fs::write(&path, out)?;
+
+        let mir_path = path.with_extension("mir");
+        std::fs::write(
+            &mir_path,
+            format!(
+                "// MIR at Analysis(Initial) for {source}, as translated into {}.\n\
+                 // Region numbers match the RVar and origin numbers in the Rocq file.\n\n{}",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                self.mir
+            ),
+        )?;
+
         Ok(path)
     }
 }

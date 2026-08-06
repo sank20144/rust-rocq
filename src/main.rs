@@ -52,10 +52,12 @@ impl rustc_driver::Callbacks for Frontend {
                 continue;
             };
             let name = tcx.def_path_str(def_id);
+            out.push_mir(&name, render_mir(tcx, &facts.body));
             out.push(name.clone(), cx.body(def_id.to_def_id(), &name, &facts.body, polonius::facts(facts)));
 
             for (idx, promoted) in facts.promoted.iter_enumerated() {
                 let pname = format!("{name}::promoted[{}]", idx.as_u32());
+                out.push_mir(&pname, render_mir(tcx, promoted));
                 out.push(pname.clone(), cx.body(def_id.to_def_id(), &pname, promoted, polonius::empty_facts()));
             }
         }
@@ -82,6 +84,15 @@ impl rustc_driver::Callbacks for Frontend {
     }
 }
 
+fn render_mir<'tcx>(tcx: TyCtxt<'tcx>, body: &rustc_middle::mir::Body<'tcx>) -> String {
+    let mut buf = Vec::new();
+    let writer = rustc_middle::mir::pretty::MirWriter::new(tcx);
+    match writer.write_mir_fn(body, &mut buf) {
+        Ok(()) => String::from_utf8_lossy(&buf).into_owned(),
+        Err(e) => format!("// could not render: {e}\n"),
+    }
+}
+
 fn sysroot() -> Option<String> {
     if let Ok(path) = std::env::var("SYSROOT") {
         return Some(path);
@@ -102,6 +113,10 @@ fn main() -> ExitCode {
             out_dir = PathBuf::from(args.remove(i + 1));
         }
         args.remove(i);
+    }
+
+    if !args.iter().any(|a| a.starts_with("-Zverbose-internals")) {
+        args.push("-Zverbose-internals".to_owned());
     }
 
     if !args.iter().any(|a| a.starts_with("--sysroot")) {

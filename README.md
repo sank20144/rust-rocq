@@ -28,6 +28,13 @@ return, rustc's drop elaboration is not part of the trusted base.
 `./check.sh` translates every input under `tests/inputs` and checks the Rocq it
 produces type-checks.
 
+Each translation writes two files, `<crate>.v` and `<crate>.mir`. The `.mir`
+file is the body the `.v` file was made from, printed by rustc. It differs from
+`-Zdump-mir` output: the borrow checker gives the driver a copy of the body with
+renumbered regions, and the `.mir` file uses those numbers, so a reference
+printed as `&'?4 u32` there is `TRef (RVar 4)` in the `.v` file. The driver
+turns on verbose printing so the region numbers are shown.
+
 ## Building
 
 Needs the pinned nightly with `rustc-dev`, see `rust-toolchain.toml`.

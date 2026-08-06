@@ -41,7 +41,8 @@ for input in tests/inputs/*.rs; do
 
     holes=$(grep -c 'TError "\|CError "' "$generated" || true)
     lines=$(wc -c <"$generated")
-    echo "ok  ${lines} bytes, ${holes} unrepresented"
+    mir=$(wc -c <"${generated%.v}.mir")
+    echo "ok  ${lines} bytes rocq, ${mir} bytes mir, ${holes} unrepresented"
 done
 
 printf '%-12s ' "instantiate"
