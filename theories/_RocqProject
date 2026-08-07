@@ -2,5 +2,6 @@
 
 Syntax.v
 Subst.v
+Eval.v
 SmokeTest.v
 SubstTest.v

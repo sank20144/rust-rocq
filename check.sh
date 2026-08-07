@@ -45,15 +45,19 @@ for input in tests/inputs/*.rs; do
     echo "ok  ${lines} bytes rocq, ${mir} bytes mir, ${holes} unrepresented"
 done
 
-printf '%-12s ' "instantiate"
-if rocq compile -Q theories RustRocq -Q "$out/coverage" Generated \
-       tests/instantiation.v 2>"$out.err"; then
-    echo "ok"
-else
-    echo "FAIL"
-    head -20 "$out.err"
-    fail=1
-fi
+check_against() {
+    printf '%-12s ' "$1"
+    if rocq compile -Q theories RustRocq -Q "$out/$2" Generated "$3" 2>"$out.err"; then
+        echo "ok"
+    else
+        echo "FAIL"
+        head -20 "$out.err"
+        fail=1
+    fi
+}
+
+check_against instantiate coverage tests/instantiation.v
+check_against evaluate arith tests/semantics.v
 
 rm -f "$out.err"
 exit $fail

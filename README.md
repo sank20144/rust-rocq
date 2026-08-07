@@ -8,6 +8,9 @@ syntax. Region and loan facts from Polonius are attached to each body.
 
 `theories/Syntax.v` contains only the syntax and does not depend on Iris.
 
+`theories/Eval.v` is a small semantics for a few constructs, used to test that
+translated bodies can be evaluated.
+
 ## Why the analysis body
 
 Polonius facts refer to locations in borrow-checked MIR. Translating a later
