@@ -46,6 +46,11 @@ impl rustc_driver::Callbacks for Frontend {
 
         let (traits, impls) = items::collect(&cx);
         out.set_items(traits, impls);
+        out.set_build_flags(vec![
+            ("overflow-checks", tcx.sess.overflow_checks().to_string()),
+            ("debug-assertions", tcx.sess.opts.debug_assertions.to_string()),
+            ("opt-level", format!("{:?}", tcx.sess.opts.optimize)),
+        ]);
 
         for def_id in store::collected() {
             let Some(facts) = store::retrieve(tcx, def_id) else {
