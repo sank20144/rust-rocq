@@ -7,9 +7,9 @@
 *.glob
 *.aux
 .lia.cache
-/theories/Makefile
-/theories/Makefile.conf
-/theories/.Makefile.d
+/Makefile
+/Makefile.conf
+/.Makefile.d
 
 /out
 

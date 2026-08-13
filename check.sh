@@ -10,7 +10,7 @@ cargo build
 if [ -z "$ROCQBIN" ] && command -v opam >/dev/null 2>&1; then
     eval "$(opam env --switch=proofs --set-switch 2>/dev/null)" || true
 fi
-(cd theories && rocq makefile -f _RocqProject -o Makefile >/dev/null && make -s)
+rocq makefile -f _RocqProject -o Makefile >/dev/null && make -s
 
 rm -rf "$out"
 fail=0
@@ -32,7 +32,7 @@ for input in tests/inputs/*.rs; do
         continue
     fi
 
-    if ! rocq compile -Q theories RustRocq -Q "$out/$name" Generated "$generated" 2>"$out.err"; then
+    if ! rocq compile -Q theories RustRocq -Q vendor Vmir -Q "$out/$name" Generated "$generated" 2>"$out.err"; then
         echo "FAIL (rocq)"
         head -20 "$out.err"
         fail=1
@@ -47,7 +47,7 @@ done
 
 check_against() {
     printf '%-12s ' "$1"
-    if rocq compile -Q theories RustRocq -Q "$out/$2" Generated "$3" 2>"$out.err"; then
+    if rocq compile -Q theories RustRocq -Q vendor Vmir -Q "$out/$2" Generated "$3" 2>"$out.err"; then
         echo "ok"
     else
         echo "FAIL"
@@ -57,7 +57,7 @@ check_against() {
 }
 
 check_against instantiate coverage tests/instantiation.v
-check_against evaluate arith tests/semantics.v
+check_against denote arith tests/denotation.v
 
 rm -f "$out.err"
 exit $fail

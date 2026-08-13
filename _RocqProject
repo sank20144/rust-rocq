@@ -1,0 +1,12 @@
+-Q theories RustRocq
+-Q vendor Vmir
+
+vendor/Layout.v
+vendor/RustcMir/Syntax.v
+vendor/Language.v
+theories/Syntax.v
+theories/Subst.v
+theories/Bridge.v
+theories/Denote.v
+theories/SmokeTest.v
+theories/SubstTest.v
