@@ -1,23 +1,21 @@
-From Stdlib Require Import Lia List String ZArith.
-From iris.bi Require Import bi.
-From iris.proofmode Require Import proofmode.
-From Vmir Require Import Layout.
-From Vmir.RustcMir Require Import Syntax.
+From RustRocq Require Import Syntax Layout.
+From Stdlib Require Import Bool Lia List String ZArith.
 
 Import ListNotations.
 
-Open Scope bi_scope.
+Open Scope list_scope.
+Notation length := List.length.
+Open Scope bool_scope.
 Open Scope Z_scope.
 
-Definition place := rs_place.
-Definition projection := rs_projection_elem.
-Definition borrow_kind := rs_borrow_kind.
-Definition place_local := rs_place_local.
-Definition place_projection := rs_place_projection.
-Notation Place := RsPlace.
-Notation ProjDeref := RsProjDeref.
-Notation ProjField := RsProjField.
-Notation ProjIndex := RsProjIndex.
+Definition float_width_bits (w : float_width) : nat :=
+  match w with FW16 => 16%nat | FW32 => 32%nat | FW64 => 64%nat | FW128 => 128%nat end.
+
+Definition const_nat (c : tconst) : option nat :=
+  match c with
+  | CValue _ bits => if Z.leb 0 bits then Some (Z.to_nat bits) else None
+  | _ => None
+  end.
 
 Inductive value_shape :=
   | ShapeUnit
@@ -33,7 +31,7 @@ Inductive value_shape :=
   | ShapeSlice (element : value_shape)
   | ShapeStr
   | ShapeTuple (fields : list value_shape)
-  | ShapeAdtType (ty : vmir_ty)
+  | ShapeAdtType (t : ty)
   | ShapeAdt (declaration : string) (variant : nat)
       (fields : list value_shape).
 
@@ -181,78 +179,77 @@ Definition int_width_bytes (width : int_width) : nat :=
   | W8 => 1
   | W16 => 2
   | W32 => 4
-  | W64 | WPointer => 8
+  | W64 | WSize => 8
   | W128 => 16
   end.
 
 Definition int_width_align (width : int_width) : nat :=
   int_width_bytes width.
 
-Definition pointer_bytes : nat := int_width_bytes WPointer.
+Definition pointer_bytes : nat := int_width_bytes WSize.
 
-Definition pointer_align : nat := int_width_align WPointer.
+Definition pointer_align : nat := int_width_align WSize.
 
-Fixpoint layouts_for_type (layouts : layout_env) (ty : vmir_ty)
+Fixpoint layouts_for_type (layouts : layout_env) (t : ty)
     : list type_layout :=
   match layouts with
   | [] => []
   | layout :: layouts =>
-      if vmir_ty_eqb (layout_ty layout) ty then
-        layout :: layouts_for_type layouts ty
-      else layouts_for_type layouts ty
+      if ty_eqb (layout_ty layout) t then
+        layout :: layouts_for_type layouts t
+      else layouts_for_type layouts t
   end.
 
-Definition find_type_layout (layouts : layout_env) (ty : vmir_ty)
+Definition find_type_layout (layouts : layout_env) (t : ty)
     : option type_layout :=
-  match layouts_for_type layouts ty with
+  match layouts_for_type layouts t with
   | [layout] => Some layout
   | _ => None
   end.
 
-Fixpoint shape_of_layout_ty_fuel (fuel : nat) (ty : vmir_ty)
+Fixpoint shape_of_layout_ty_fuel (fuel : nat) (t : ty)
     : option value_shape :=
   match fuel with
   | O => None
   | S fuel =>
-      let fix shapes_of_tys (tys : list vmir_ty)
+      let fix shapes_of_tys (tys : list ty)
           : option (list value_shape) :=
         match tys with
         | [] => Some []
-        | ty :: tys =>
-            match shape_of_layout_ty_fuel fuel ty, shapes_of_tys tys with
+        | t :: tys =>
+            match shape_of_layout_ty_fuel fuel t, shapes_of_tys tys with
             | Some shape, Some shapes => Some (shape :: shapes)
             | _, _ => None
             end
         end in
-      match ty with
-      | TyUnit => Some ShapeUnit
-      | TyNever => Some ShapeNever
-      | TyBool => Some ShapeBool
-      | TyChar => Some ShapeChar
-      | TyFloat bits => Some (ShapeFloat bits)
-      | TyInt width | TyUint width => Some (ShapeBits width)
-      | TyRef kind pointee =>
+      match t with
+      | TNever => Some ShapeNever
+      | TBool => Some ShapeBool
+      | TChar => Some ShapeChar
+      | TFloat w => Some (ShapeFloat (float_width_bits w))
+      | TInt width | TUint width => Some (ShapeBits width)
+      | TRef _ pointee kind =>
           match shape_of_layout_ty_fuel fuel pointee with
           | Some shape => Some (ShapeReference kind shape)
           | None => None
           end
-      | TyRawPtr kind pointee =>
+      | TRawPtr pointee kind =>
           match shape_of_layout_ty_fuel fuel pointee with
           | Some shape => Some (ShapeRawPointer kind shape)
           | None => None
           end
-      | TyArray element length =>
-          match shape_of_layout_ty_fuel fuel element with
-          | Some shape => Some (ShapeArray shape length)
-          | None => None
+      | TArray element length =>
+          match shape_of_layout_ty_fuel fuel element, const_nat length with
+          | Some shape, Some n => Some (ShapeArray shape n)
+          | _, _ => None
           end
-      | TySlice element =>
+      | TSlice element =>
           match shape_of_layout_ty_fuel fuel element with
           | Some shape => Some (ShapeSlice shape)
           | None => None
           end
-      | TyStr => Some ShapeStr
-      | TyTuple fields =>
+      | TStr => Some ShapeStr
+      | TTuple fields =>
           match fields with
           | [] => Some ShapeUnit
           | _ =>
@@ -261,64 +258,72 @@ Fixpoint shape_of_layout_ty_fuel (fuel : nat) (ty : vmir_ty)
               | None => None
               end
           end
-      | TyAdt _ _ => Some (ShapeAdtType ty)
+      | TAdt _ _ => Some (ShapeAdtType t)
+      | _ => None
       end
   end.
 
-Definition shape_of_layout_ty (ty : vmir_ty) : option value_shape :=
-  shape_of_layout_ty_fuel 64%nat ty.
+Definition shape_of_layout_ty (t : ty) : option value_shape :=
+  shape_of_layout_ty_fuel 64%nat t.
 
 Fixpoint shape_matches_ty_fuel (fuel : nat) (shape : value_shape)
-    (ty : vmir_ty) : bool :=
+    (t : ty) : bool :=
   match fuel with
   | O => false
   | S fuel =>
       let fix shapes_match_tys (shapes : list value_shape)
-          (tys : list vmir_ty) : bool :=
+          (tys : list ty) : bool :=
         match shapes, tys with
         | [], [] => true
-        | shape :: shapes, ty :: tys =>
-            shape_matches_ty_fuel fuel shape ty && shapes_match_tys shapes tys
+        | shape :: shapes, t :: tys =>
+            shape_matches_ty_fuel fuel shape t && shapes_match_tys shapes tys
         | _, _ => false
         end in
-      match shape, ty with
-      | ShapeUnit, TyUnit => true
-      | ShapeNever, TyNever => true
-      | ShapeBool, TyBool => true
-      | ShapeChar, TyChar => true
-      | ShapeFloat bits, TyFloat bits' => Nat.eqb bits bits'
-      | ShapeBits width, TyInt width' | ShapeBits width, TyUint width' =>
+      match shape, t with
+      | ShapeUnit, TTuple [] => true
+      | ShapeNever, TNever => true
+      | ShapeBool, TBool => true
+      | ShapeChar, TChar => true
+      | ShapeFloat bits, TFloat w => Nat.eqb bits (float_width_bits w)
+      | ShapeBits width, TInt width' | ShapeBits width, TUint width' =>
           int_width_eqb width width'
-      | ShapePointer pointee, TyRef _ pointee_ty
-      | ShapePointer pointee, TyRawPtr _ pointee_ty =>
+      | ShapePointer pointee, TRef _ pointee_ty _
+      | ShapePointer pointee, TRawPtr pointee_ty _ =>
           shape_matches_ty_fuel fuel pointee pointee_ty
-      | ShapeReference kind pointee, TyRef kind' pointee_ty
-      | ShapeRawPointer kind pointee, TyRawPtr kind' pointee_ty =>
+      | ShapeReference kind pointee, TRef _ pointee_ty kind'
+      | ShapeRawPointer kind pointee, TRawPtr pointee_ty kind' =>
           match kind, kind' with
-          | Shared, Shared | Mut, Mut =>
+          | Imm, Imm | Mut, Mut =>
               shape_matches_ty_fuel fuel pointee pointee_ty
           | _, _ => false
           end
-      | ShapeTuple fields, TyTuple field_tys =>
+      | ShapeTuple fields, TTuple field_tys =>
           shapes_match_tys fields field_tys
-      | ShapeTuple fields, TyArray element length =>
-          Nat.eqb (List.length fields) length &&
-          forallb (fun shape => shape_matches_ty_fuel fuel shape element) fields
-      | ShapeArray element length, TyArray element' length' =>
-          Nat.eqb length length' &&
+      | ShapeTuple fields, TArray element length =>
+          match const_nat length with
+          | Some n =>
+              Nat.eqb (List.length fields) n &&
+              forallb (fun shape => shape_matches_ty_fuel fuel shape element) fields
+          | None => false
+          end
+      | ShapeArray element length, TArray element' length' =>
+          match const_nat length' with
+          | Some n =>
+              Nat.eqb length n && shape_matches_ty_fuel fuel element element'
+          | None => false
+          end
+      | ShapeSlice element, TSlice element' =>
           shape_matches_ty_fuel fuel element element'
-      | ShapeSlice element, TySlice element' =>
-          shape_matches_ty_fuel fuel element element'
-      | ShapeStr, TyStr => true
-      | ShapeAdtType exact, TyAdt _ _ => vmir_ty_eqb exact ty
-      | ShapeAdt declaration _ _, TyAdt declaration' _ =>
+      | ShapeStr, TStr => true
+      | ShapeAdtType exact, TAdt _ _ => ty_eqb exact t
+      | ShapeAdt declaration _ _, TAdt declaration' _ =>
           String.eqb declaration declaration'
       | _, _ => false
       end
   end.
 
-Definition shape_matches_ty (shape : value_shape) (ty : vmir_ty) : bool :=
-  shape_matches_ty_fuel 64 shape ty.
+Definition shape_matches_ty (shape : value_shape) (t : ty) : bool :=
+  shape_matches_ty_fuel 64 shape t.
 
 Fixpoint layouts_for_shape (layouts : layout_env) (shape : value_shape)
     : list type_layout :=
@@ -369,14 +374,14 @@ Fixpoint shape_layout_supported_fuel
           | Some _ => shapes_supported fields
           | None => false
           end
-      | ShapeAdtType ty =>
-          match find_type_layout layouts ty with
+      | ShapeAdtType adt =>
+          match find_type_layout layouts adt with
           | Some layout =>
-              let fix tys_supported (tys : list vmir_ty) : bool :=
+              let fix tys_supported (tys : list ty) : bool :=
                 match tys with
                 | [] => true
-                | ty :: tys =>
-                    match shape_of_layout_ty_fuel fuel ty with
+                | t :: tys =>
+                    match shape_of_layout_ty_fuel fuel t with
                     | Some shape =>
                         shape_layout_supported_fuel fuel layouts shape &&
                         tys_supported tys
@@ -443,18 +448,18 @@ Definition layout_variant (layout : type_layout) (variant : nat)
   end.
 
 Definition layout_variant_field_types (layout : type_layout) (variant : nat)
-    : option (list vmir_ty) :=
+    : option (list ty) :=
   match layout_variant layout variant with
   | Some variant_layout => Some (variant_field_types variant_layout)
   | None => None
   end.
 
-Fixpoint shapes_of_layout_tys (tys : list vmir_ty)
+Fixpoint shapes_of_layout_tys (tys : list ty)
     : option (list value_shape) :=
   match tys with
   | [] => Some []
-  | ty :: tys =>
-      match shape_of_layout_ty ty, shapes_of_layout_tys tys with
+  | t :: tys =>
+      match shape_of_layout_ty t, shapes_of_layout_tys tys with
       | Some shape, Some shapes => Some (shape :: shapes)
       | _, _ => None
       end
@@ -819,7 +824,7 @@ Fixpoint value_shape_eqb_fuel (fuel : nat)
       | ShapeRawPointer left_kind left_pointee,
           ShapeRawPointer right_kind right_pointee =>
           match left_kind, right_kind with
-          | Shared, Shared | Mut, Mut =>
+          | Imm, Imm | Mut, Mut =>
               value_shape_eqb_fuel fuel left_pointee right_pointee
           | _, _ => false
           end
@@ -833,7 +838,7 @@ Fixpoint value_shape_eqb_fuel (fuel : nat)
       | ShapeTuple left_fields, ShapeTuple right_fields =>
           value_shapes_eqb left_fields right_fields
       | ShapeAdtType left_ty, ShapeAdtType right_ty =>
-          vmir_ty_eqb left_ty right_ty
+          ty_eqb left_ty right_ty
       | ShapeAdt left_decl left_variant left_fields,
           ShapeAdt right_decl right_variant right_fields =>
           String.eqb left_decl right_decl &&
@@ -1647,7 +1652,7 @@ Fixpoint encode_typed_memory_value_with_layouts_fuel
           else None
       | ShapeAdtType ty, VUnion declaration active_field field =>
           match ty, find_type_layout layouts ty with
-          | TyAdt expected_declaration _, Some layout =>
+          | TAdt expected_declaration _, Some layout =>
               if String.eqb expected_declaration declaration then
                 match layout_fields layout,
                     nth_error (layout_field_types layout) active_field,
@@ -1671,7 +1676,7 @@ Fixpoint encode_typed_memory_value_with_layouts_fuel
           end
       | ShapeAdtType ty, VAdt declaration variant values =>
           match ty with
-          | TyAdt expected_declaration _ =>
+          | TAdt expected_declaration _ =>
               if String.eqb expected_declaration declaration then
                 match find_type_layout layouts ty with
                 | Some layout =>
@@ -1836,7 +1841,7 @@ Fixpoint decode_typed_memory_value_with_layouts_fuel
             end
         | ShapeAdtType ty =>
             match ty, find_type_layout layouts ty with
-            | TyAdt declaration _, Some layout =>
+            | TAdt declaration _, Some layout =>
                 match layout_fields layout with
                 | FieldsUnion _ =>
                     if valid_bytes (memory_value_bytes value) &&
@@ -2098,7 +2103,7 @@ Fixpoint validate_loaded_references_fuel
       | ShapeTuple shapes, VTuple values => validate_values shapes values
       | ShapeAdtType ty, VAdt declaration variant values =>
           match ty, find_type_layout layouts ty with
-          | TyAdt expected_declaration _, Some layout =>
+          | TAdt expected_declaration _, Some layout =>
               if String.eqb expected_declaration declaration then
                 match layout_variant_field_shapes layout variant with
                 | Some shapes => validate_values shapes values
@@ -2109,7 +2114,7 @@ Fixpoint validate_loaded_references_fuel
           end
       | ShapeAdtType ty, VUnion declaration active_field field =>
           match ty, find_type_layout layouts ty with
-          | TyAdt expected_declaration _, Some layout =>
+          | TAdt expected_declaration _, Some layout =>
               if String.eqb expected_declaration declaration then
                 match layout_fields layout,
                     nth_error (layout_field_types layout) active_field with
@@ -2126,7 +2131,7 @@ Fixpoint validate_loaded_references_fuel
           | _, _ => AccessFail
           end
       | ShapeAdtType ty, VRawAggregate (ShapeAdtType ty') _ _ _ =>
-          if vmir_ty_eqb ty ty' then AccessOk tt else AccessFail
+          if ty_eqb ty ty' then AccessOk tt else AccessFail
       | ShapeAdt declaration variant shapes,
           VAdt declaration' variant' values =>
           if String.eqb declaration declaration' && Nat.eqb variant variant'
@@ -2523,7 +2528,7 @@ Definition expose_pointer_provenance
             match nth_error (state_memory state) allocation with
             | Some target =>
                 if allocation_live target then
-                  AccessOk (VBits WPointer address,
+                  AccessOk (VBits WSize address,
                     state_with_exposed_allocations state
                       (add_exposed_allocation allocation
                         (state_exposed_allocations state)))
@@ -2531,9 +2536,9 @@ Definition expose_pointer_provenance
             | None => AccessUb UbDanglingPointer
             end
         | ProvenanceNone | ProvenanceExposed _ =>
-            AccessOk (VBits WPointer address, state)
+            AccessOk (VBits WSize address, state)
         | ProvenanceFunction _ =>
-            AccessOk (VBits WPointer address, state)
+            AccessOk (VBits WSize address, state)
         end
   end.
 
@@ -2931,42 +2936,42 @@ Definition shape_index_address (shape : value_shape) (index : nat)
   end.
 
 Definition shape_projection_address (shape : value_shape)
-    (projection : projection) : option (value_shape * nat) :=
+    (projection : proj_elem) : option (value_shape * nat) :=
   match projection, shape with
-  | ProjField index _, ShapeTuple fields =>
+  | PField index _, ShapeTuple fields =>
       match nth_error fields index with
       | Some field => Some (field, shapes_prefix_size index fields)
       | None => None
       end
-  | ProjField index _, ShapeAdt _ _ fields =>
+  | PField index _, ShapeAdt _ _ fields =>
       match nth_error fields index with
       | Some field => Some (field, (pointer_bytes + shapes_prefix_size index fields)%nat)
       | None => None
       end
-  | RsProjConstantIndex offset min_length from_end, ShapeTuple fields =>
+  | PConstantIndex offset min_length from_end, ShapeTuple fields =>
       match constant_projection_index offset min_length from_end fields with
       | Some index => shape_index_address shape index
       | None => None
       end
-  | RsProjConstantIndex offset min_length from_end,
+  | PConstantIndex offset min_length from_end,
       ShapeArray element length =>
       match constant_projection_index offset min_length from_end
           (repeat element length) with
       | Some index => shape_index_address shape index
       | None => None
       end
-  | RsProjDowncast _ variant, ShapeAdt declaration variant' fields =>
+  | PDowncast _ variant, ShapeAdt declaration variant' fields =>
       if Nat.eq_dec variant variant' then
         Some (ShapeAdt declaration variant fields, 0%nat)
       else None
-  | RsProjSubslice from to_ from_end, ShapeTuple fields =>
+  | PSubslice from to_ from_end, ShapeTuple fields =>
       match source_subslice_from_end from to_ from_end fields with
       | Some end_count =>
           Some (ShapeTuple (subslice_list from end_count fields),
             shapes_prefix_size from fields)
       | None => None
       end
-  | RsProjSubslice from to_ from_end, ShapeArray element length =>
+  | PSubslice from to_ from_end, ShapeArray element length =>
       match source_subslice_from_end from to_ from_end
           (repeat element length) with
       | Some end_count =>
@@ -2975,7 +2980,7 @@ Definition shape_projection_address (shape : value_shape)
             (from * shape_size element)%nat)
       | None => None
       end
-  | RsProjOpaqueCast _, _ | RsProjUnwrapUnsafeBinder _, _ =>
+  | POpaqueCast _, _ | PUnwrapUnsafeBinder _, _ =>
       Some (shape, 0%nat)
   | _, _ => None
   end.
@@ -3011,17 +3016,17 @@ Definition layout_index_address (layouts : layout_env) (shape : value_shape)
   end.
 
 Definition layout_projection_address (layouts : layout_env)
-    (shape : value_shape) (projection : projection)
+    (shape : value_shape) (projection : proj_elem)
     : option (value_shape * nat) :=
   match find_layout_for_shape layouts shape with
   | Some layout =>
       match projection, shape with
-      | ProjField index _, ShapeTuple fields =>
+      | PField index _, ShapeTuple fields =>
           match nth_error fields index, layout_field_offset layout index with
           | Some field, Some offset => Some (field, offset)
           | _, _ => None
           end
-      | ProjField index _, ShapeAdt _ variant fields =>
+      | PField index _, ShapeAdt _ variant fields =>
           match nth_error fields index,
               layout_variant_field_offset layout variant index with
           | Some field, Some offset => Some (field, offset)
@@ -3031,9 +3036,9 @@ Definition layout_projection_address (layouts : layout_env)
               | _, _ => None
               end
           end
-      | ProjField index _, ShapeAdtType ty =>
+      | PField index _, ShapeAdtType ty =>
           match ty, layout_variants layout with
-          | TyAdt _ _, VariantsSingle variant =>
+          | TAdt _ _, VariantsSingle variant =>
               match layout_variant_field_shapes layout variant,
                   layout_variant_field_offset layout variant index with
               | Some fields, Some offset =>
@@ -3045,25 +3050,25 @@ Definition layout_projection_address (layouts : layout_env)
               end
           | _, _ => None
           end
-      | RsProjDowncast _ variant, ShapeAdtType ty =>
+      | PDowncast _ variant, ShapeAdtType ty =>
           match ty, layout_variant_field_shapes layout variant with
-          | TyAdt declaration _, Some fields =>
+          | TAdt declaration _, Some fields =>
               Some (ShapeAdt declaration variant fields, 0%nat)
           | _, _ => None
           end
-      | RsProjConstantIndex offset min_length from_end, ShapeTuple fields =>
+      | PConstantIndex offset min_length from_end, ShapeTuple fields =>
           match constant_projection_index offset min_length from_end fields with
           | Some index => layout_index_address layouts shape index
           | None => None
           end
-      | RsProjConstantIndex offset min_length from_end,
+      | PConstantIndex offset min_length from_end,
           ShapeArray element length =>
           match constant_projection_index offset min_length from_end
               (repeat element length) with
           | Some index => layout_index_address layouts shape index
           | None => None
           end
-      | RsProjSubslice from to_ from_end, ShapeTuple fields =>
+      | PSubslice from to_ from_end, ShapeTuple fields =>
           match source_subslice_from_end from to_ from_end fields with
           | Some end_count =>
               let shape' := ShapeTuple (subslice_list from end_count fields) in
@@ -3080,7 +3085,7 @@ Definition layout_projection_address (layouts : layout_env)
               end
           | None => None
           end
-      | RsProjSubslice from to_ from_end, ShapeArray element length =>
+      | PSubslice from to_ from_end, ShapeArray element length =>
           match source_subslice_from_end from to_ from_end
               (repeat element length) with
           | Some end_count =>
@@ -3099,10 +3104,10 @@ Definition layout_projection_address (layouts : layout_env)
   end.
 
 Definition projection_address_result (layouts : layout_env) (state : prog_state)
-    (shape : value_shape) (projection : projection)
+    (shape : value_shape) (projection : proj_elem)
     : access_result (value_shape * nat) :=
   match projection with
-  | ProjIndex local =>
+  | PIndex local =>
       match runtime_index_result state local with
       | AccessOk index =>
           match layout_index_address layouts shape index with
@@ -3116,18 +3121,18 @@ Definition projection_address_result (layouts : layout_env) (state : prog_state)
       | AccessUb reason => AccessUb reason
       | AccessFail => AccessFail
       end
-  | ProjDeref => AccessFail
+  | PDeref => AccessFail
   | _ =>
       match layout_projection_address layouts shape projection with
       | Some address => AccessOk address
       | None =>
           match projection, shape with
-          | RsProjConstantIndex _ _ _, ShapeTuple _
-          | RsProjConstantIndex _ _ _, ShapeArray _ _
-          | RsProjSubslice _ _ _, ShapeTuple _
-          | RsProjSubslice _ _ _, ShapeArray _ _ => AccessUb UbOutOfBounds
-          | RsProjDowncast _ _, ShapeAdtType _
-          | RsProjDowncast _ _, ShapeAdt _ _ _ => AccessUb UbInvalidEnumTag
+          | PConstantIndex _ _ _, ShapeTuple _
+          | PConstantIndex _ _ _, ShapeArray _ _
+          | PSubslice _ _ _, ShapeTuple _
+          | PSubslice _ _ _, ShapeArray _ _ => AccessUb UbOutOfBounds
+          | PDowncast _ _, ShapeAdtType _
+          | PDowncast _ _, ShapeAdt _ _ _ => AccessUb UbInvalidEnumTag
           | _, _ => AccessFail
           end
       end
@@ -3135,13 +3140,13 @@ Definition projection_address_result (layouts : layout_env) (state : prog_state)
 
 Fixpoint address_projections_result (layouts : layout_env) (state : prog_state)
     (shape : value_shape) (allocation offset : nat)
-    (projections : list projection)
+    (projections : list proj_elem)
     : access_result (value_shape * nat * nat) :=
   match projections with
   | [] => AccessOk (shape, allocation, offset)
   | projection :: projections =>
       match projection with
-      | ProjDeref =>
+      | PDeref =>
           match read_allocation_result_with_layouts layouts
               (state_memory state) allocation offset shape with
           | AccessOk (VPointerValue pointee pointer) =>
@@ -3182,17 +3187,17 @@ Fixpoint address_projections_result (layouts : layout_env) (state : prog_state)
 
 Definition address_projections (state : prog_state)
     (shape : value_shape) (allocation offset : nat)
-    (projections : list projection)
+    (projections : list proj_elem)
     : access_result (value_shape * nat * nat) :=
   address_projections_result [] state shape allocation offset projections.
 
 Definition address_of_place_result (layouts : layout_env)
     (target : place) (state : prog_state)
     : access_result (value_shape * nat * nat) :=
-  match local_address_result state (place_local target) with
+  match local_address_result state (pl_local target) with
   | AccessOk (shape, allocation, offset) =>
       address_projections_result layouts state shape allocation offset
-        (place_projection target)
+        (pl_proj target)
   | AccessUb reason => AccessUb reason
   | AccessFail => AccessFail
   end.
@@ -3202,8 +3207,8 @@ Definition address_of_place_with_layouts (layouts : layout_env)
     : option runtime_value :=
   match address_of_place_result layouts target state with
   | AccessOk (shape, allocation, offset) =>
-      match rev (place_projection target), shape with
-      | RsProjSubslice _ _ _ :: _, ShapeArray element length =>
+      match rev (pl_proj target), shape with
+      | PSubslice _ _ _ :: _, ShapeArray element length =>
           Some (VPointerValue (ShapeSlice element)
             (PointerValue (ProvenanceAllocation allocation)
               (Z.of_nat offset) (PointerLength length)))
@@ -3237,8 +3242,8 @@ Definition denote_borrow_with_layouts (layouts : layout_env)
       match read_allocation_result_with_layouts layouts (state_memory state)
           allocation offset shape with
       | AccessOk _ =>
-          match rev (place_projection borrowed), shape with
-          | RsProjSubslice _ _ _ :: _, ShapeArray element length =>
+          match rev (pl_proj borrowed), shape with
+          | PSubslice _ _ _ :: _, ShapeArray element length =>
               Some (VPointerValue (ShapeSlice element)
                 (PointerValue (ProvenanceAllocation allocation)
                   (Z.of_nat offset) (PointerLength length)), state)
@@ -3441,6 +3446,7 @@ Lemma local_and_pointer_read_results_agree
 Proof.
   intros Hsized Hnonzero Haddress.
   unfold read_place_result_with_layouts, address_of_place_result.
+  cbn [pl_local pl_proj].
   rewrite Haddress. simpl.
   unfold read_through_pointer_result.
   rewrite Hsized.
@@ -3453,10 +3459,10 @@ Qed.
 Definition write_place_with_layouts (layouts : layout_env)
     (target : place) (value : runtime_value)
     (state : prog_state) : option prog_state :=
-  match place_projection target,
-      nth_error (state_locals state) (place_local target) with
+  match pl_proj target,
+      nth_error (state_locals state) (pl_local target) with
   | [], Some LocalUnallocated =>
-      allocate_local_value_with_layouts layouts (place_local target) value state
+      allocate_local_value_with_layouts layouts (pl_local target) value state
   | _, _ =>
       match address_of_place_result layouts target state with
       | AccessOk (shape, allocation, offset) =>
@@ -3484,7 +3490,7 @@ Definition read_place_ub_reason (state : prog_state) (target : place)
 
 Definition write_place_ub_reason_with_layouts (layouts : layout_env)
     (state : prog_state) (target : place) (reason : ub_reason) : Prop :=
-  match place_projection target with
+  match pl_proj target with
   | [] => False
   | _ =>
       match address_of_place_result layouts target state with
@@ -3503,8 +3509,8 @@ Definition write_place_ub_reason (state : prog_state) (target : place)
 Definition write_place_value_ub_reason_with_layouts (layouts : layout_env)
     (state : prog_state) (target : place) (value : runtime_value)
     (reason : ub_reason) : Prop :=
-  match place_projection target,
-      nth_error (state_locals state) (place_local target) with
+  match pl_proj target,
+      nth_error (state_locals state) (pl_local target) with
   | [], Some LocalUnallocated => False
   | _, _ =>
       match address_of_place_result layouts target state with

@@ -400,3 +400,78 @@ Record body := Body {
   bd_regions : list origin;
   bd_facts : facts;
 }.
+
+Definition int_width_eqb (a b : int_width) : bool :=
+  match a, b with
+  | W8, W8 | W16, W16 | W32, W32 | W64, W64 | W128, W128 | WSize, WSize => true
+  | _, _ => false
+  end.
+
+Definition float_width_eqb (a b : float_width) : bool :=
+  match a, b with
+  | FW16, FW16 | FW32, FW32 | FW64, FW64 | FW128, FW128 => true
+  | _, _ => false
+  end.
+
+Definition mutability_eqb (a b : mutability) : bool :=
+  match a, b with Mut, Mut | Imm, Imm => true | _, _ => false end.
+
+Definition alias_kind_eqb (a b : alias_kind) : bool :=
+  match a, b with
+  | AkProjection, AkProjection | AkInherent, AkInherent
+  | AkOpaque, AkOpaque | AkFree, AkFree => true
+  | _, _ => false
+  end.
+
+Fixpoint ty_eqb (a b : ty) {struct a} : bool :=
+  let fix gargs (xs ys : list garg) : bool :=
+    match xs, ys with
+    | nil, nil => true
+    | cons x xs, cons y ys => andb (garg_eqb x y) (gargs xs ys)
+    | _, _ => false
+    end in
+  let fix tys (xs ys : list ty) : bool :=
+    match xs, ys with
+    | nil, nil => true
+    | cons x xs, cons y ys => andb (ty_eqb x y) (tys xs ys)
+    | _, _ => false
+    end in
+  match a, b with
+  | TBool, TBool | TChar, TChar | TStr, TStr | TNever, TNever => true
+  | TInt x, TInt y | TUint x, TUint y => int_width_eqb x y
+  | TFloat x, TFloat y => float_width_eqb x y
+  | TAdt p x, TAdt q y => andb (String.eqb p q) (gargs x y)
+  | TForeign p, TForeign q => String.eqb p q
+  | TArray e n, TArray f m => andb (ty_eqb e f) (tconst_eqb n m)
+  | TSlice e, TSlice f => ty_eqb e f
+  | TRawPtr p x, TRawPtr q y => andb (ty_eqb p q) (mutability_eqb x y)
+  | TRef _ p x, TRef _ q y => andb (ty_eqb p q) (mutability_eqb x y)
+  | TFnDef p x, TFnDef q y => andb (String.eqb p q) (gargs x y)
+  | TUnsafeBinder x, TUnsafeBinder y => ty_eqb x y
+  | TClosure p x, TClosure q y => andb (String.eqb p q) (gargs x y)
+  | TCoroutine p x, TCoroutine q y => andb (String.eqb p q) (gargs x y)
+  | TCoroutineClosure p x, TCoroutineClosure q y => andb (String.eqb p q) (gargs x y)
+  | TCoroutineWitness p x, TCoroutineWitness q y => andb (String.eqb p q) (gargs x y)
+  | TTuple x, TTuple y => tys x y
+  | TAlias k p x, TAlias l q y =>
+      andb (alias_kind_eqb k l) (andb (String.eqb p q) (gargs x y))
+  | TParam i _, TParam j _ => Nat.eqb i j
+  | TError x, TError y => String.eqb x y
+  | _, _ => false
+  end
+
+with tconst_eqb (a b : tconst) {struct a} : bool :=
+  match a, b with
+  | CParam i _, CParam j _ => Nat.eqb i j
+  | CValue t x, CValue u y => andb (ty_eqb t u) (Z.eqb x y)
+  | CError x, CError y => String.eqb x y
+  | _, _ => false
+  end
+
+with garg_eqb (a b : garg) {struct a} : bool :=
+  match a, b with
+  | GTy x, GTy y => ty_eqb x y
+  | GLifetime _, GLifetime _ => true
+  | GConst x, GConst y => tconst_eqb x y
+  | _, _ => false
+  end.

@@ -1,12 +1,9 @@
-From Vmir Require Import Layout Language.
-From RustRocq Require Import Syntax Bridge.
+From RustRocq Require Import Syntax Layout Memory.
 From Stdlib Require Import String List ZArith.
 Import ListNotations.
 
 Local Open Scope string_scope.
 Local Open Scope nat_scope.
-
-Module Rs := Vmir.RustcMir.Syntax.
 
 Inductive outcome (A : Type) :=
   | Ok (a : A) (st : prog_state)
@@ -64,16 +61,71 @@ Fixpoint iter {A B} (fuel : nat) (step : A -> M (A + B)) (a : A) : M B :=
       end
   end.
 
-Definition place_of (p : place) : M Rs.rs_place :=
-  of_option "place outside the bridge" (to_place p).
+Fixpoint packed_offsets (at_ : nat) (ts : list ty) : list nat :=
+  match ts with
+  | [] => []
+  | t :: rest =>
+      let sz := match shape_of_layout_ty t with
+                | Some sh => shape_size_with_layouts [] sh
+                | None => 0%nat
+                end in
+      at_ :: packed_offsets (at_ + sz) rest
+  end.
+
+Definition packed_layout (t : ty) (sh : value_shape) : type_layout :=
+  let fields := match t with
+                | TTuple ts => ts
+                | TAdt _ _ => []
+                | _ => []
+                end in
+  let fl := match t with
+            | TTuple ts => FieldsArbitrary (packed_offsets 0%nat ts)
+            | TArray e n =>
+                FieldsArray (match shape_of_layout_ty e with
+                             | Some esh => shape_size_with_layouts [] esh
+                             | None => 0%nat
+                             end)
+                            (match const_nat n with Some k => k | None => 0%nat end)
+            | _ => FieldsPrimitive
+            end in
+  TypeLayoutData "packed" t
+    (shape_size_with_layouts [] sh) (shape_align_with_layouts [] sh)
+    false fields fl (VariantsSingle 0%nat) (AbiMemory true).
+
+Fixpoint shapes_of (fuel : nat) (t : ty) : list (ty * value_shape) :=
+  match fuel with
+  | 0%nat => []
+  | S f =>
+      let here := match shape_of_layout_ty t with
+                  | Some sh => [(t, sh)]
+                  | None => []
+                  end in
+      let inner := match t with
+                   | TTuple ts => concat (map (shapes_of f) ts)
+                   | TArray e _ | TSlice e => shapes_of f e
+                   | TRef _ p _ | TRawPtr p _ => shapes_of f p
+                   | _ => []
+                   end in
+      here ++ inner
+  end.
+
+Fixpoint dedup (acc : list ty) (xs : list (ty * value_shape)) : list type_layout :=
+  match xs with
+  | [] => []
+  | (t, sh) :: rest =>
+      if existsb (ty_eqb t) acc
+      then dedup acc rest
+      else packed_layout t sh :: dedup (t :: acc) rest
+  end.
+
+Definition layouts_of_body (b : body) : layout_env :=
+  dedup [] (concat (map (fun d => shapes_of 32%nat (ld_ty d)) (bd_locals b))).
 
 Definition read (env : layout_env) (p : place) : M runtime_value :=
-  p' <- place_of p ;;
-  fun st => of_access "read place" (read_place_result_with_layouts env p' st) st.
+  fun st => of_access "read place" (read_place_result_with_layouts env p st) st.
 
 Definition write (env : layout_env) (p : place) (v : runtime_value) : M unit :=
-  p' <- place_of p ;;
-  fun st => match write_place_with_layouts env p' v st with
+  fun st => match write_place_with_layouts env p v st with
             | Some st' => Ok tt st'
             | None => Unmodelled "write place"
             end.
@@ -82,8 +134,8 @@ Definition const_value (t : ty) (v : const_value) : M runtime_value :=
   match v, t with
   | CvScalar (ScInt z _), TBool => ret (VBool (negb (Z.eqb z 0%Z)))
   | CvScalar (ScInt z _), TChar => ret (VChar z)
-  | CvScalar (ScInt z _), TInt w => ret (VBits (to_width w) z)
-  | CvScalar (ScInt z _), TUint w => ret (VBits (to_width w) z)
+  | CvScalar (ScInt z _), TInt w => ret (VBits w z)
+  | CvScalar (ScInt z _), TUint w => ret (VBits w z)
   | CvZeroSized, _ => ret VUnit
   | _, _ => fail "constant outside the fragment"
   end.
@@ -101,29 +153,29 @@ Definition denote_operand (env : layout_env) (o : operand) : M runtime_value :=
   | ORuntimeCheck _ => ret (VBool true)
   end.
 
-Definition bits_of (t : ty) : option (Layout.int_width * bool) :=
+Definition bits_of (t : ty) : option (int_width * bool) :=
   match t with
-  | TInt w => Some (to_width w, true)
-  | TUint w => Some (to_width w, false)
+  | TInt w => Some (w, true)
+  | TUint w => Some (w, false)
   | _ => None
   end.
 
-Definition width_bits (w : Layout.int_width) : Z :=
+Definition width_bits (w : int_width) : Z :=
   match w with
-  | Layout.W8 => 8%Z | Layout.W16 => 16%Z | Layout.W32 => 32%Z
-  | Layout.W64 => 64%Z | Layout.W128 => 128%Z | Layout.WPointer => 64%Z
+  | W8 => 8%Z | W16 => 16%Z | W32 => 32%Z
+  | W64 => 64%Z | W128 => 128%Z | WSize => 64%Z
   end.
 
-Definition wrap (w : Layout.int_width) (signed : bool) (z : Z) : Z :=
+Definition wrap (w : int_width) (signed : bool) (z : Z) : Z :=
   Z.modulo z (Z.pow 2%Z (width_bits w)).
 
-Definition interp (w : Layout.int_width) (signed : bool) (z : Z) : Z :=
+Definition interp (w : int_width) (signed : bool) (z : Z) : Z :=
   if signed
   then let m := Z.pow 2%Z (width_bits w) in
        if Z.ltb z (Z.pow 2%Z (Z.sub (width_bits w) 1%Z)) then z else Z.sub z m
   else z.
 
-Definition overflows (w : Layout.int_width) (signed : bool) (z : Z) : bool :=
+Definition overflows (w : int_width) (signed : bool) (z : Z) : bool :=
   if signed
   then let h := Z.pow 2%Z (Z.sub (width_bits w) 1%Z) in
        orb (Z.ltb z (Z.opp h)) (Z.leb h z)
@@ -207,8 +259,7 @@ Definition denote_rvalue (env : layout_env) (dst : ty) (r : rvalue) : M runtime_
       denote_binop dst op x y
   | RUnaryOp op o => v <- denote_operand env o ;; denote_unop dst op v
   | RRef _ _ p | RRawPtr _ p =>
-      p' <- place_of p ;;
-      fun st => match address_of_place_with_layouts env p' st with
+      fun st => match address_of_place_with_layouts env p st with
                 | Some v => Ok v st
                 | None => Unmodelled "address of place"
                 end
@@ -233,7 +284,7 @@ Definition denote_statement (env : layout_env) (b : body) (s : statement) : M un
       v <- denote_rvalue env (local_ty b (pl_local p)) r ;;
       write env p v
   | SStorageLive l =>
-      sh <- of_option "shape of local" (to_shape (local_ty b l)) ;;
+      sh <- of_option "shape of local" (shape_of_layout_ty (local_ty b l)) ;;
       fun st => match storage_live_local_with_layouts env sh l st with
                 | Some st' => Ok tt st'
                 | None => Unmodelled "storage live"
@@ -293,11 +344,10 @@ Definition denote_terminator (env : layout_env) (b : body) (t : terminator) : M 
       | _ => fail "assert on a non-boolean"
       end
   | TDrop p target _ _ _ =>
-      p' <- place_of p ;;
       fun st =>
-        match read_place_result_with_layouts env p' st with
+        match read_place_result_with_layouts env p st with
         | AccessOk _ =>
-            match deinitialize_place_with_layouts env p' st with
+            match deinitialize_place_with_layouts env p st with
             | Some st' => Ok (inl target) st'
             | None => Unmodelled "deinitialise at drop"
             end

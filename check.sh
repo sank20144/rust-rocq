@@ -32,7 +32,7 @@ for input in tests/inputs/*.rs; do
         continue
     fi
 
-    if ! rocq compile -Q theories RustRocq -Q vendor Vmir -Q "$out/$name" Generated "$generated" 2>"$out.err"; then
+    if ! rocq compile -Q theories RustRocq -Q "$out/$name" Generated "$generated" 2>"$out.err"; then
         echo "FAIL (rocq)"
         head -20 "$out.err"
         fail=1
@@ -47,7 +47,7 @@ done
 
 check_against() {
     printf '%-12s ' "$1"
-    if rocq compile -Q theories RustRocq -Q vendor Vmir -Q "$out/$2" Generated "$3" 2>"$out.err"; then
+    if rocq compile -Q theories RustRocq -Q "$out/$2" Generated "$3" 2>"$out.err"; then
         echo "ok"
     else
         echo "FAIL"

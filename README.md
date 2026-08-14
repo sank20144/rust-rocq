@@ -9,8 +9,8 @@ syntax. Region and loan facts from Polonius are attached to each body.
 `theories/Syntax.v` contains only the syntax and does not depend on Iris.
 
 `theories/Denote.v` gives the syntax a denotational semantics over the
-byte-level memory model in `vendor/`, so a translated body can be run. A
-construct with no meaning evaluates to `Unmodelled`.
+byte-level memory model in `theories/Memory.v`, so a translated body can be run.
+A construct with no meaning evaluates to `Unmodelled`.
 
 ## Why the analysis body
 
@@ -26,8 +26,7 @@ return, rustc's drop elaboration is not part of the trusted base.
 ## Layout
 
     src/          rustc driver and the MIR to Rocq translation
-    theories/     the Rocq syntax, generic instantiation, and the semantics
-    vendor/       byte-level memory model, copied from llm-verif
+    theories/     the Rocq syntax, memory model, instantiation and semantics
     tests/        Rust inputs, and Rocq checks over the translation of them
 
 `./check.sh` translates every input under `tests/inputs` and checks the Rocq it
