@@ -5,5 +5,3 @@ theories/Layout.v
 theories/Memory.v
 theories/Subst.v
 theories/Denote.v
-theories/SmokeTest.v
-theories/SubstTest.v

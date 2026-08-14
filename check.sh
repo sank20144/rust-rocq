@@ -56,6 +56,13 @@ check_against() {
     fi
 }
 
+printf '%-12s ' "subst"
+if rocq compile -Q theories RustRocq tests/subst.v 2>"$out.err"; then
+    echo "ok"
+else
+    echo "FAIL"; head -20 "$out.err"; fail=1
+fi
+
 check_against instantiate coverage tests/instantiation.v
 check_against denote arith tests/denotation.v
 
