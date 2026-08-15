@@ -5,14 +5,15 @@ Import ListNotations.
 
 Local Open Scope string_scope.
 
+Definition pat32 (z : Z) : runtime_value := VBits W32 (Z.modulo z (2 ^ 32)).
+
 Example add_two_and_three :
   eval 20 add [VBits W32 2; VBits W32 3]
   = ARet (VBits W32 5).
 Proof. vm_compute. reflexivity. Qed.
 
 Example add_is_signed :
-  eval 20 add [VBits W32 4294967291; VBits W32 2]
-  = ARet (VBits W32 4294967293).
+  eval 20 add [pat32 (-5); pat32 2] = ARet (pat32 (-3)).
 Proof. vm_compute. reflexivity. Qed.
 
 Example add_overflow_panics :
