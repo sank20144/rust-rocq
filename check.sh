@@ -7,6 +7,10 @@ out=${1:-out}
 
 cargo build
 
+for built in $(find theories tests -name '*.vo' -o -name '*.glob' -o -name '*.vok' -o -name '*.vos' 2>/dev/null); do
+    [ -f "${built%.*}.v" ] || rm -f "$built"
+done
+
 if [ -z "$ROCQBIN" ] && command -v opam >/dev/null 2>&1; then
     eval "$(opam env --switch=proofs --set-switch 2>/dev/null)" || true
 fi
