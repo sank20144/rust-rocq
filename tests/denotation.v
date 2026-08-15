@@ -52,3 +52,21 @@ Proof. vm_compute. reflexivity. Qed.
 Example the_wrong_number_of_arguments_is_refused :
   eval 20 add [VBits W32 1] = AMismatch "wrong number of arguments".
 Proof. vm_compute. reflexivity. Qed.
+
+Definition one_local : prog_state := local_state [Uninit; Init (VBits W32 7)].
+
+Example a_move_deinitialises_its_source :
+  match denote_operand [] (OMove (Place 1%nat [])) one_local with
+  | Ok v st => (v, read_place_result_with_layouts [] (Place 1%nat []) st)
+  | _ => (VUnit, AccessFail)
+  end
+  = (VBits W32 7, AccessUb UbReadUninitialized).
+Proof. vm_compute. reflexivity. Qed.
+
+Example a_copy_leaves_its_source_alone :
+  match denote_operand [] (OCopy (Place 1%nat [])) one_local with
+  | Ok v st => (v, read_place_result_with_layouts [] (Place 1%nat []) st)
+  | _ => (VUnit, AccessFail)
+  end
+  = (VBits W32 7, AccessOk (VBits W32 7)).
+Proof. vm_compute. reflexivity. Qed.

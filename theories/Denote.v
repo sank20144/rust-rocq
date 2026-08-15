@@ -151,7 +151,13 @@ Definition denote_const (c : const_op) : M runtime_value :=
 
 Definition denote_operand (env : layout_env) (o : operand) : M runtime_value :=
   match o with
-  | OCopy p | OMove p => read env p
+  | OCopy p => read env p
+  | OMove p =>
+      v <- read env p ;;
+      fun st => match deinitialize_place_with_layouts env p st with
+                | Some st' => Ok v st'
+                | None => Unmodelled "deinitialise at move"
+                end
   | OConst c => denote_const c
   | ORuntimeCheck _ => ret (VBool true)
   end.
