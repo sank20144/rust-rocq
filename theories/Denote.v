@@ -1,4 +1,4 @@
-From RustRocq Require Import Syntax Layout Memory.
+From RustRocq Require Import Syntax Layout Memory Subst.
 From Stdlib Require Import String List ZArith.
 Import ListNotations.
 
@@ -9,11 +9,13 @@ Inductive outcome (A : Type) :=
   | Ok (a : A) (st : prog_state)
   | Ub (reason : ub_reason)
   | Unmodelled (what : string)
+  | Mismatch (what : string)
   | OutOfFuel.
 
 Arguments Ok {A} _ _.
 Arguments Ub {A} _.
 Arguments Unmodelled {A} _.
+Arguments Mismatch {A} _.
 Arguments OutOfFuel {A}.
 
 Definition M (A : Type) : Type := prog_state -> outcome A.
@@ -26,6 +28,7 @@ Definition bind {A B} (m : M A) (k : A -> M B) : M B :=
     | Ok a st' => k a st'
     | Ub r => Ub r
     | Unmodelled w => Unmodelled w
+    | Mismatch w => Mismatch w
     | OutOfFuel => OutOfFuel
     end.
 
@@ -376,6 +379,16 @@ Definition denote_block (env : layout_env) (b : body) (n : block_id) : M (block_
 Definition denote_body (fuel : nat) (b : body) : M result :=
   iter fuel (denote_block (layouts_of_body b) b) 0.
 
+Fixpoint args_match (b : body) (i : nat) (args : list runtime_value) : bool :=
+  match args with
+  | [] => true
+  | v :: rest =>
+      match nth_error (bd_locals b) (S i) with
+      | Some d => shape_matches_ty (shape_of_value v) (ld_ty d) && args_match b (S i) rest
+      | None => false
+      end
+  end.
+
 Definition entry_state (b : body) (args : list runtime_value) : prog_state :=
   local_state
     (Uninit ::
@@ -387,7 +400,15 @@ Definition entry_state (b : body) (args : list runtime_value) : prog_state :=
      ++ repeat Uninit (length (bd_locals b) - S (bd_arg_count b))).
 
 Definition run (fuel : nat) (b : body) (args : list runtime_value) : outcome result :=
-  denote_body fuel b (entry_state b args).
+  if negb (Nat.eqb (length args) (bd_arg_count b))
+  then Mismatch "wrong number of arguments"
+  else if negb (args_match b 0 args)
+  then Mismatch "argument does not match the declared type"
+  else denote_body fuel b (entry_state b args).
+
+Definition run_at (fuel : nat) (b : body) (targs : list garg)
+    (args : list runtime_value) : outcome result :=
+  run fuel (subst_body targs b) args.
 
 Inductive answer :=
   | ARet (v : runtime_value)
@@ -395,6 +416,7 @@ Inductive answer :=
   | AUnwind
   | AUb (reason : ub_reason)
   | AUnmodelled (what : string)
+  | AMismatch (what : string)
   | AFuel.
 
 Definition answer_of (o : outcome result) : answer :=
@@ -404,8 +426,13 @@ Definition answer_of (o : outcome result) : answer :=
   | Ok Unwound _ => AUnwind
   | Ub r => AUb r
   | Unmodelled w => AUnmodelled w
+  | Mismatch w => AMismatch w
   | OutOfFuel => AFuel
   end.
 
 Definition eval (fuel : nat) (b : body) (args : list runtime_value) : answer :=
   answer_of (run fuel b args).
+
+Definition eval_at (fuel : nat) (b : body) (targs : list garg)
+    (args : list runtime_value) : answer :=
+  answer_of (run_at fuel b targs args).
