@@ -39,6 +39,9 @@ renumbered regions, and the `.mir` file uses those numbers, so a reference
 printed as `&'?4 u32` there is `TRef (RVar 4)` in the `.v` file. The driver
 turns on verbose printing so the region numbers are shown.
 
+`docs/constructs.md` lists every MIR construct, whether the semantics gives it a
+meaning, and what that meaning is.
+
 ## Building
 
 Needs the pinned nightly with `rustc-dev`, see `rust-toolchain.toml`.
