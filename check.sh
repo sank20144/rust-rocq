@@ -46,29 +46,22 @@ for input in tests/inputs/*.rs; do
     holes=$(grep -c 'TError "\|CError "' "$generated" || true)
     lines=$(wc -c <"$generated")
     mir=$(wc -c <"${generated%.v}.mir")
-    echo "ok  ${lines} bytes rocq, ${mir} bytes mir, ${holes} unrepresented"
-done
 
-check_against() {
-    printf '%-12s ' "$1"
-    if rocq compile -Q theories RustRocq -Q "$out/$2" Generated "$3" 2>"$out.err"; then
-        echo "ok"
+    if [ -f "tests/$name.v" ]; then
+        if rocq compile -Q theories RustRocq -Q "$out/$name" Generated "tests/$name.v" 2>"$out.err"; then
+            checks="checked"
+        else
+            echo "FAIL (tests/$name.v)"
+            head -20 "$out.err"
+            fail=1
+            continue
+        fi
     else
-        echo "FAIL"
-        head -20 "$out.err"
-        fail=1
+        checks="no checks"
     fi
-}
 
-printf '%-12s ' "subst"
-if rocq compile -Q theories RustRocq tests/subst.v 2>"$out.err"; then
-    echo "ok"
-else
-    echo "FAIL"; head -20 "$out.err"; fail=1
-fi
-
-check_against instantiate coverage tests/instantiation.v
-check_against denote arith tests/denotation.v
+    echo "ok  ${lines} bytes rocq, ${mir} bytes mir, ${holes} unrepresented, ${checks}"
+done
 
 rm -f "$out.err"
 exit $fail

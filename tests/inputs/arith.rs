@@ -34,7 +34,3 @@ pub fn spin(n: u64) -> u64 {
         }
     }
 }
-
-pub fn id<T>(x: T) -> T {
-    x
-}

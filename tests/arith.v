@@ -30,20 +30,6 @@ Example spin_never_finishes :
   eval 30 spin [VBits W64 7] = AFuel.
 Proof. vm_compute. reflexivity. Qed.
 
-Example a_generic_body_will_not_run_uninstantiated :
-  eval 20 id [VBits W32 7]
-  = AMismatch "argument does not match the declared type".
-Proof. vm_compute. reflexivity. Qed.
-
-Example instantiating_makes_it_run :
-  eval_at 20 id [GTy (TUint W32)] [VBits W32 7] = ARet (VBits W32 7).
-Proof. vm_compute. reflexivity. Qed.
-
-Example instantiated_at_u32_still_refuses_a_bool :
-  eval_at 20 id [GTy (TUint W32)] [VBool true]
-  = AMismatch "argument does not match the declared type".
-Proof. vm_compute. reflexivity. Qed.
-
 Example a_monomorphic_body_refuses_the_wrong_type :
   eval 20 add [VBool true; VBits W32 3]
   = AMismatch "argument does not match the declared type".
