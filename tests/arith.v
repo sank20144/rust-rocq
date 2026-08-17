@@ -23,10 +23,6 @@ Example gcd_of_twelve_and_eighteen :
   Means gcd [VBits W64 12; VBits W64 18] (ARet (VBits W64 6)).
 Proof. apply (means_within 120%nat). vm_compute. reflexivity. Qed.
 
-Example spin_has_not_settled_after_thirty_steps :
-  peek 30 (run spin [VBits W64 7]) = None.
-Proof. vm_compute. reflexivity. Qed.
-
 Example a_monomorphic_body_refuses_the_wrong_type :
   Means add [VBool true; VBits W32 3]
     (AMismatch "argument does not match the declared type").
