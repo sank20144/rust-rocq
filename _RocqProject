@@ -1,7 +1,3 @@
 -Q theories RustRocq
 
 theories/Syntax.v
-theories/Layout.v
-theories/Memory.v
-theories/Subst.v
-theories/Denote.v
