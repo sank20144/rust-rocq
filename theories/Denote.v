@@ -5,18 +5,22 @@ Import ListNotations.
 Local Open Scope string_scope.
 Local Open Scope nat_scope.
 
+CoInductive delay (A : Type) : Type :=
+  | Now (a : A)
+  | Later (d : delay A).
+Arguments Now {A} _.
+Arguments Later {A} _.
+
 Inductive outcome (A : Type) :=
   | Ok (a : A) (st : prog_state)
   | Ub (reason : ub_reason)
   | Unmodelled (what : string)
-  | Mismatch (what : string)
-  | OutOfFuel.
+  | Mismatch (what : string).
 
 Arguments Ok {A} _ _.
 Arguments Ub {A} _.
 Arguments Unmodelled {A} _.
 Arguments Mismatch {A} _.
-Arguments OutOfFuel {A}.
 
 Definition M (A : Type) : Type := prog_state -> outcome A.
 
@@ -29,7 +33,6 @@ Definition bind {A B} (m : M A) (k : A -> M B) : M B :=
     | Ub r => Ub r
     | Unmodelled w => Unmodelled w
     | Mismatch w => Mismatch w
-    | OutOfFuel => OutOfFuel
     end.
 
 Notation "x <- m ;; k" := (bind m (fun x => k))
@@ -53,16 +56,22 @@ Definition of_access {A} (what : string) (r : access_result A) : M A :=
 Definition of_option {A} (what : string) (o : option A) : M A :=
   fun st => match o with Some a => Ok a st | None => Unmodelled what end.
 
-Fixpoint iter {A B} (fuel : nat) (step : A -> M (A + B)) (a : A) : M B :=
-  match fuel with
-  | 0 => fun _ => OutOfFuel
-  | S f =>
-      r <- step a ;;
-      match r with
-      | inl a' => iter f step a'
-      | inr b => ret b
-      end
+CoFixpoint drive {L R} (step : L -> M (L + R)) (l : L) (st : prog_state)
+    : delay (outcome R) :=
+  match step l st with
+  | Ok (inl l') st' => Later (drive step l' st')
+  | Ok (inr r) st' => Now (Ok r st')
+  | Ub p => Now (Ub p)
+  | Unmodelled w => Now (Unmodelled w)
+  | Mismatch w => Now (Mismatch w)
   end.
+
+Inductive Terminates {A} : delay A -> A -> Prop :=
+  | TNow : forall a, Terminates (Now a) a
+  | TLater : forall d a, Terminates d a -> Terminates (Later d) a.
+
+CoInductive Diverges {A} : delay A -> Prop :=
+  | DLater : forall d, Diverges d -> Diverges (Later d).
 
 Fixpoint packed_offsets (at_ : nat) (ts : list ty) : list nat :=
   match ts with
@@ -382,8 +391,8 @@ Definition denote_block (env : layout_env) (b : body) (n : block_id) : M (block_
       denote_terminator env b (bb_term blk)
   end.
 
-Definition denote_body (fuel : nat) (b : body) : M result :=
-  iter fuel (denote_block (layouts_of_body b) b) 0.
+Definition denote_body (b : body) (st : prog_state) : delay (outcome result) :=
+  drive (denote_block (layouts_of_body b) b) 0 st.
 
 Fixpoint args_match (b : body) (i : nat) (args : list runtime_value) : bool :=
   match args with
@@ -405,16 +414,45 @@ Definition entry_state (b : body) (args : list runtime_value) : prog_state :=
          (seq 0 (bd_arg_count b))
      ++ repeat Uninit (length (bd_locals b) - S (bd_arg_count b))).
 
-Definition run (fuel : nat) (b : body) (args : list runtime_value) : outcome result :=
+Definition run (b : body) (args : list runtime_value) : delay (outcome result) :=
   if negb (Nat.eqb (length args) (bd_arg_count b))
-  then Mismatch "wrong number of arguments"
+  then Now (Mismatch "wrong number of arguments")
   else if negb (args_match b 0 args)
-  then Mismatch "argument does not match the declared type"
-  else denote_body fuel b (entry_state b args).
+  then Now (Mismatch "argument does not match the declared type")
+  else denote_body b (entry_state b args).
 
-Definition run_at (fuel : nat) (b : body) (targs : list garg)
-    (args : list runtime_value) : outcome result :=
-  run fuel (subst_body targs b) args.
+Definition run_at (b : body) (targs : list garg)
+    (args : list runtime_value) : delay (outcome result) :=
+  run (subst_body targs b) args.
+
+Fixpoint peek {A} (n : nat) (d : delay A) : option A :=
+  match n, d with
+  | _, Now a => Some a
+  | S k, Later d' => peek k d'
+  | 0, Later _ => None
+  end.
+
+Lemma peek_terminates {A} : forall n (d : delay A) a,
+  peek n d = Some a -> Terminates d a.
+Proof.
+  induction n as [|n IH]; intros d a H; destruct d; cbn in H.
+  - injection H; intros; subst; constructor.
+  - discriminate.
+  - injection H; intros; subst; constructor.
+  - constructor. apply IH. exact H.
+Qed.
+
+Theorem terminates_deterministic {A} : forall (d : delay A) a a',
+  Terminates d a -> Terminates d a' -> a = a'.
+Proof.
+  intros d a a' H. revert a'.
+  induction H as [x|d x _ IH]; intros a' H'; inversion H'; subst; auto.
+Qed.
+
+Theorem not_both {A} : forall (d : delay A) a, Terminates d a -> ~ Diverges d.
+Proof.
+  intros d a H. induction H as [x|d x _ IH]; intros C; inversion C; auto.
+Qed.
 
 Inductive answer :=
   | ARet (v : runtime_value)
@@ -422,8 +460,7 @@ Inductive answer :=
   | AUnwind
   | AUb (reason : ub_reason)
   | AUnmodelled (what : string)
-  | AMismatch (what : string)
-  | AFuel.
+  | AMismatch (what : string).
 
 Definition answer_of (o : outcome result) : answer :=
   match o with
@@ -433,12 +470,28 @@ Definition answer_of (o : outcome result) : answer :=
   | Ub r => AUb r
   | Unmodelled w => AUnmodelled w
   | Mismatch w => AMismatch w
-  | OutOfFuel => AFuel
   end.
 
-Definition eval (fuel : nat) (b : body) (args : list runtime_value) : answer :=
-  answer_of (run fuel b args).
+Definition Means (b : body) (args : list runtime_value) (a : answer) : Prop :=
+  exists o, Terminates (run b args) o /\ answer_of o = a.
 
-Definition eval_at (fuel : nat) (b : body) (targs : list garg)
-    (args : list runtime_value) : answer :=
-  answer_of (run_at fuel b targs args).
+Definition MeansAt (b : body) (targs : list garg)
+    (args : list runtime_value) (a : answer) : Prop :=
+  Means (subst_body targs b) args a.
+
+Theorem means_deterministic :
+  forall b args a a', Means b args a -> Means b args a' -> a = a'.
+Proof.
+  intros b args a a' [o [Ht Ha]] [o' [Ht' Ha']].
+  rewrite (terminates_deterministic _ _ _ Ht Ht') in Ha. congruence.
+Qed.
+
+Lemma means_within (n : nat) :
+  forall b args a,
+    option_map answer_of (peek n (run b args)) = Some a ->
+    Means b args a.
+Proof.
+  intros b args a H.
+  destruct (peek n (run b args)) as [o|] eqn:E; cbn in H; [|discriminate].
+  exists o. split; [ apply (peek_terminates n); exact E | congruence ].
+Qed.

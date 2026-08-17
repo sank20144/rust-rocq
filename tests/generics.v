@@ -42,18 +42,18 @@ Example bounds_are_instantiated_too :
 Proof. reflexivity. Qed.
 
 Example a_generic_body_will_not_run_uninstantiated :
-  eval 20 id [VBits W32 7]
-  = AMismatch "argument does not match the declared type".
-Proof. vm_compute. reflexivity. Qed.
+  Means id [VBits W32 7]
+    (AMismatch "argument does not match the declared type").
+Proof. apply (means_within 20%nat). vm_compute. reflexivity. Qed.
 
 Example instantiating_makes_it_run :
-  eval_at 20 id [GTy (TUint W32)] [VBits W32 7] = ARet (VBits W32 7).
-Proof. vm_compute. reflexivity. Qed.
+  MeansAt id [GTy (TUint W32)] [VBits W32 7] (ARet (VBits W32 7)).
+Proof. apply (means_within 20%nat). vm_compute. reflexivity. Qed.
 
 Example instantiated_at_u32_still_refuses_a_bool :
-  eval_at 20 id [GTy (TUint W32)] [VBool true]
-  = AMismatch "argument does not match the declared type".
-Proof. vm_compute. reflexivity. Qed.
+  MeansAt id [GTy (TUint W32)] [VBool true]
+    (AMismatch "argument does not match the declared type").
+Proof. apply (means_within 20%nat). vm_compute. reflexivity. Qed.
 
 Example substituting_nothing_changes_nothing : subst_body [] id = id.
 Proof. reflexivity. Qed.
