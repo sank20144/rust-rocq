@@ -11,9 +11,16 @@ for built in $(find theories tests -name '*.vo' -o -name '*.glob' -o -name '*.vo
     [ -f "${built%.*}.v" ] || rm -f "$built"
 done
 
-if [ -z "$ROCQBIN" ] && command -v opam >/dev/null 2>&1; then
-    eval "$(opam env --switch=proofs --set-switch 2>/dev/null)" || true
+if ! command -v rocq >/dev/null 2>&1 && command -v opam >/dev/null 2>&1; then
+    eval "$(opam env 2>/dev/null)" || true
 fi
+if ! command -v rocq >/dev/null 2>&1; then
+    echo "rocq not found on PATH." >&2
+    echo "Install Rocq 9.0 or later, or activate the switch holding it:" >&2
+    echo "    eval \$(opam env --switch=<name> --set-switch)" >&2
+    exit 1
+fi
+
 rocq makefile -f _RocqProject -o Makefile >/dev/null && make -s
 
 rm -rf "$out"

@@ -4,9 +4,12 @@ Translates Rust MIR into Rocq.
 
 ## Requirements
 
-- The nightly pinned in `rust-toolchain.toml`, with the `rustc-dev` component.
-  rustup installs it on first build.
-- Rocq 9.0 or later on `PATH`.
+- Linux on x86-64. The driver links against rustc's own libraries.
+- rustup. The nightly and components in `rust-toolchain.toml` are installed on
+  the first build.
+- Rocq 9.0 or later on `PATH`. If it is in an opam switch, activate it:
+
+      eval $(opam env --switch=<name> --set-switch)
 
 ## Build
 
@@ -15,6 +18,8 @@ Translates Rust MIR into Rocq.
 ## Translate a file
 
     ./run.sh --rocq-out out/mine path/to/file.rs
+
+Other arguments are passed to rustc, for example `--edition 2024`.
 
 Writes two files into `out/mine`:
 
