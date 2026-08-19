@@ -2,42 +2,30 @@
 
 Translates Rust MIR into Rocq.
 
-The frontend is a rustc driver that reads the borrow-checked MIR body
-(`MirPhase::Analysis(Initial)`) and emits Rocq terms of a deeply embedded MIR
-syntax. Region and loan facts from Polonius are attached to each body.
+## Requirements
 
-`theories/Syntax.v` defines that syntax. It does not depend on Iris and does not
-define a semantics.
+- The nightly pinned in `rust-toolchain.toml`, with the `rustc-dev` component.
+  rustup installs it on first build.
+- Rocq 9.0 or later on `PATH`.
 
-## Why the analysis body
+## Build
 
-Polonius facts refer to locations in borrow-checked MIR. Translating a later
-phase would mean mapping those locations back, which takes RefinedRust about
-3,000 lines and still leaves some locations unmapped. Translating the
-borrow-checked body avoids that mapping.
+    cargo build
 
-At this phase `Drop` is conditional, so the semantics has to track which places
-are initialised instead of reading drop flags from the control-flow graph. In
-return, rustc's drop elaboration is not part of the trusted base.
+## Translate a file
 
-## Layout
+    ./run.sh --rocq-out out/mine path/to/file.rs
 
-    src/          rustc driver and the MIR to Rocq translation
-    theories/     the Rocq syntax generated files are terms of
-    tests/inputs/ Rust inputs
+Writes two files into `out/mine`:
 
-`./check.sh` translates every input and checks the Rocq it produces type-checks.
+- `<crate>.v`, the translation
+- `<crate>.mir`, the MIR it was made from
 
-Each translation writes two files, `<crate>.v` and `<crate>.mir`. The `.mir`
-file is the body the `.v` file was made from, printed by rustc. It differs from
-`-Zdump-mir` output: the borrow checker gives the driver a copy of the body with
-renumbered regions, and the `.mir` file uses those numbers, so a reference
-printed as `&'?4 u32` there is `TRef (RVar 4)` in the `.v` file.
+The input must be a crate root the pinned compiler can build on its own.
 
-## Building
+## Check
 
-Needs the pinned nightly with `rustc-dev`, see `rust-toolchain.toml`.
+    ./check.sh
 
-    cargo build --release
-
-The Rocq side needs Rocq 9.0 or later.
+Translates every input under `tests/inputs` and compiles each result against
+`theories/Syntax.v`.
