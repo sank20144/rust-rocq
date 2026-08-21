@@ -8,5 +8,9 @@ description = "Translates Rust MIR into Rocq"
 name = "rust-rocq"
 path = "src/main.rs"
 
+[[bin]]
+name = "cargo-rocq"
+path = "src/bin/cargo-rocq.rs"
+
 [profile.release]
 debug = true
