@@ -362,30 +362,29 @@ Record impl_def := ImplDef {
 
 Definition origin := nat.
 Definition loan := nat.
-Definition move_path := nat.
 
 Inductive point :=
   | PtStart (b : block_id) (stmt : nat)
   | PtMid (b : block_id) (stmt : nat).
 
-Record facts := Facts {
-  fa_universal_region : list origin;
-  fa_placeholder : list (origin * loan);
-  fa_known_placeholder_subset : list (origin * origin);
-  fa_loan_issued_at : list (origin * loan * point);
-  fa_loan_killed_at : list (loan * point);
-  fa_loan_invalidated_at : list (point * loan);
-  fa_subset_base : list (origin * origin * point);
-  fa_var_used_at : list (local * point);
-  fa_var_defined_at : list (local * point);
-  fa_var_dropped_at : list (local * point);
-  fa_use_of_var_derefs_origin : list (local * origin);
-  fa_drop_of_var_derefs_origin : list (local * origin);
-  fa_child_path : list (move_path * move_path);
-  fa_path_is_var : list (move_path * local);
-  fa_path_assigned_at_base : list (move_path * point);
-  fa_path_moved_at_base : list (move_path * point);
-  fa_path_accessed_at_base : list (move_path * point);
+Record loan_start := LoanStart {
+  ls_origin : origin;
+  ls_loan : loan;
+  ls_at : point;
+}.
+
+Record loan_end := LoanEnd {
+  le_loan : loan;
+  le_from : point;
+  le_to : option point;
+}.
+
+Record borrowck_annotations := BorrowckAnnotations {
+  ba_universal_regions : list origin;
+  ba_placeholders : list (origin * loan);
+  ba_known_placeholder_subsets : list (origin * origin);
+  ba_loan_starts : list loan_start;
+  ba_loan_ends : list loan_end;
 }.
 
 Record body := Body {
@@ -398,7 +397,7 @@ Record body := Body {
   bd_locals : list local_decl;
   bd_blocks : list basic_block;
   bd_regions : list origin;
-  bd_facts : facts;
+  bd_borrowck : borrowck_annotations;
 }.
 
 Definition int_width_eqb (a b : int_width) : bool :=

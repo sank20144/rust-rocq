@@ -72,7 +72,7 @@ impl rustc_driver::Callbacks for Frontend {
                     def_id.to_def_id(),
                     &name,
                     &facts.body,
-                    polonius::facts(facts),
+                    polonius::annotations(facts),
                 ),
             );
 
@@ -85,7 +85,7 @@ impl rustc_driver::Callbacks for Frontend {
                         def_id.to_def_id(),
                         &pname,
                         promoted,
-                        polonius::empty_facts(),
+                        polonius::empty_annotations(),
                     ),
                 );
             }

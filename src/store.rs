@@ -4,6 +4,7 @@ use std::sync::{LazyLock, Mutex};
 
 use rustc_borrowck::consumers::{
     self, BodyWithBorrowckFacts, ConsumerOptions, PoloniusInput, PoloniusLocationTable,
+    PoloniusOutput,
 };
 use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def_id::LocalDefId;
@@ -16,6 +17,7 @@ pub struct Facts<'tcx> {
     pub promoted: IndexVec<Promoted, Body<'tcx>>,
     pub input_facts: Option<Box<PoloniusInput>>,
     pub location_table: Option<PoloniusLocationTable>,
+    pub output_facts: Option<Box<PoloniusOutput>>,
 }
 
 static BODIES: LazyLock<Mutex<HashMap<LocalDefId, Facts<'static>>>> =
@@ -28,7 +30,7 @@ pub fn mir_borrowck(
     let bodies = consumers::get_bodies_with_borrowck_facts(
         tcx,
         def_id,
-        ConsumerOptions::PoloniusInputFacts,
+        ConsumerOptions::PoloniusOutputFacts,
     );
 
     let bodies: FxHashMap<LocalDefId, BodyWithBorrowckFacts<'static>> =
@@ -43,6 +45,7 @@ pub fn mir_borrowck(
                 promoted: facts.promoted,
                 input_facts: facts.input_facts,
                 location_table: facts.location_table,
+                output_facts: facts.output_facts,
             },
         );
     }

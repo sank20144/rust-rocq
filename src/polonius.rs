@@ -1,104 +1,380 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use rustc_borrowck::consumers::RichLocation;
 
 use crate::rocq::{self, Term};
 use crate::store::Facts;
 
-const RELATIONS: [&str; 17] = [
-    "universal_region",
-    "placeholder",
-    "known_placeholder_subset",
-    "loan_issued_at",
-    "loan_killed_at",
-    "loan_invalidated_at",
-    "subset_base",
-    "var_used_at",
-    "var_defined_at",
-    "var_dropped_at",
-    "use_of_var_derefs_origin",
-    "drop_of_var_derefs_origin",
-    "child_path",
-    "path_is_var",
-    "path_assigned_at_base",
-    "path_moved_at_base",
-    "path_accessed_at_base",
-];
+type Id = u32;
 
-pub fn facts(f: &Facts<'_>) -> Term {
-    let (Some(input), Some(table)) = (f.input_facts.as_deref(), f.location_table.as_ref()) else {
-        return empty_facts();
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum Point {
+    Start(Id, usize),
+    Mid(Id, usize),
+}
+
+impl Point {
+    fn from_rich(value: RichLocation) -> Self {
+        match value {
+            RichLocation::Start(location) => {
+                Self::Start(location.block.as_u32(), location.statement_index)
+            }
+            RichLocation::Mid(location) => {
+                Self::Mid(location.block.as_u32(), location.statement_index)
+            }
+        }
+    }
+
+    fn term(self) -> Term {
+        match self {
+            Self::Start(block, statement) => rocq::app(
+                "PtStart",
+                vec![rocq::nat(block as u64), rocq::nat(statement as u64)],
+            ),
+            Self::Mid(block, statement) => rocq::app(
+                "PtMid",
+                vec![rocq::nat(block as u64), rocq::nat(statement as u64)],
+            ),
+        }
+    }
+}
+
+type PointSet = BTreeSet<Point>;
+type IdSet = BTreeSet<Id>;
+type LiveAt = BTreeMap<Point, IdSet>;
+type RegionLoans = BTreeMap<Point, BTreeMap<Id, IdSet>>;
+type RegionSubsets = BTreeMap<Point, BTreeMap<Id, IdSet>>;
+
+fn zombie_loans(
+    requires: &RegionLoans,
+    killed: &BTreeSet<(Id, Point)>,
+    edges: &BTreeSet<(Point, Point)>,
+    origin_live: &BTreeMap<Point, IdSet>,
+    subsets: &RegionSubsets,
+) -> LiveAt {
+    let mut zombie_requires = BTreeSet::<(Id, Id, Point)>::new();
+
+    for &(loan, point) in killed {
+        let Some(regions) = requires.get(&point) else {
+            continue;
+        };
+        for (&region, loans) in regions {
+            if !loans.contains(&loan) {
+                continue;
+            }
+            for &(_, target) in edges.iter().filter(|(source, _)| *source == point) {
+                if origin_live
+                    .get(&target)
+                    .is_some_and(|live| live.contains(&region))
+                {
+                    zombie_requires.insert((region, loan, target));
+                }
+            }
+        }
+    }
+
+    loop {
+        let mut changed = false;
+        let current: Vec<_> = zombie_requires.iter().copied().collect();
+        for (region, loan, point) in current {
+            if let Some(targets) = subsets.get(&point).and_then(|at| at.get(&region)) {
+                for &target_region in targets {
+                    changed |= zombie_requires.insert((target_region, loan, point));
+                }
+            }
+            for &(_, target) in edges.iter().filter(|(source, _)| *source == point) {
+                if origin_live
+                    .get(&target)
+                    .is_some_and(|live| live.contains(&region))
+                {
+                    changed |= zombie_requires.insert((region, loan, target));
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut result = LiveAt::new();
+    for (region, loan, point) in zombie_requires {
+        if origin_live
+            .get(&point)
+            .is_some_and(|live| live.contains(&region))
+        {
+            result.entry(point).or_default().insert(loan);
+        }
+    }
+    result
+}
+
+fn add_live(into: &mut LiveAt, from: &LiveAt) {
+    for (&point, loans) in from {
+        into.entry(point).or_default().extend(loans);
+    }
+}
+
+fn loan_ends(
+    live: &LiveAt,
+    edges: &BTreeSet<(Point, Point)>,
+) -> BTreeSet<(Id, Point, Option<Point>)> {
+    let mut ends = BTreeSet::new();
+    for &(from, to) in edges {
+        let from_live = live.get(&from).cloned().unwrap_or_default();
+        let to_live = live.get(&to).cloned().unwrap_or_default();
+        for loan in from_live.difference(&to_live) {
+            ends.insert((*loan, from, Some(to)));
+        }
+    }
+
+    let outgoing: PointSet = edges.iter().map(|(from, _)| *from).collect();
+    for (&at, loans) in live {
+        if !outgoing.contains(&at) {
+            for &loan in loans {
+                ends.insert((loan, at, None));
+            }
+        }
+    }
+    ends
+}
+
+fn id(value: impl Into<u32>) -> Id {
+    value.into()
+}
+
+pub fn annotations(f: &Facts<'_>) -> Term {
+    let (Some(input), Some(output), Some(table)) = (
+        f.input_facts.as_deref(),
+        f.output_facts.as_deref(),
+        f.location_table.as_ref(),
+    ) else {
+        return empty_annotations();
     };
+    let point = |p| Point::from_rich(table.to_rich_location(p));
 
-    let pt = |p| point(table.to_rich_location(p));
+    let mut starts = BTreeSet::new();
+    let mut issued = LiveAt::new();
+    for &(origin, loan, at) in &input.loan_issued_at {
+        let at = point(at);
+        let loan = id(loan);
+        starts.insert((id(origin), loan, at));
+        issued.entry(at).or_default().insert(loan);
+    }
+
+    let edges: BTreeSet<_> = input
+        .cfg_edge
+        .iter()
+        .map(|&(from, to)| (point(from), point(to)))
+        .collect();
+    let killed: BTreeSet<_> = input
+        .loan_killed_at
+        .iter()
+        .map(|&(loan, at)| (id(loan), point(at)))
+        .collect();
+
+    let mut ordinary = LiveAt::new();
+    for (at, loans) in &output.loan_live_at {
+        ordinary
+            .entry(point(*at))
+            .or_default()
+            .extend(loans.iter().copied().map(id));
+    }
+
+    let mut origin_live = BTreeMap::<Point, IdSet>::new();
+    for (at, origins) in &output.origin_live_on_entry {
+        origin_live
+            .entry(point(*at))
+            .or_default()
+            .extend(origins.iter().copied().map(id));
+    }
+
+    let mut requires = RegionLoans::new();
+    for (at, regions) in &output.origin_contains_loan_at {
+        let at = point(*at);
+        for (origin, loans) in regions {
+            requires
+                .entry(at)
+                .or_default()
+                .entry(id(*origin))
+                .or_default()
+                .extend(loans.iter().copied().map(id));
+        }
+    }
+
+    let mut subsets = RegionSubsets::new();
+    for (at, regions) in &output.subset {
+        let at = point(*at);
+        for (origin, targets) in regions {
+            subsets
+                .entry(at)
+                .or_default()
+                .entry(id(*origin))
+                .or_default()
+                .extend(targets.iter().copied().map(id));
+        }
+    }
+
+    let zombies = zombie_loans(&requires, &killed, &edges, &origin_live, &subsets);
+    let mut live = ordinary;
+    add_live(&mut live, &zombies);
+    add_live(&mut live, &issued);
+
+    let ends = loan_ends(&live, &edges);
+
+    let mut universal: Vec<_> = input.universal_region.iter().copied().map(id).collect();
+    universal.sort_unstable();
+    universal.dedup();
+    let mut placeholders: Vec<_> = input
+        .placeholder
+        .iter()
+        .map(|&(origin, loan)| (id(origin), id(loan)))
+        .collect();
+    placeholders.sort_unstable();
+    placeholders.dedup();
+    let mut known_subsets: Vec<_> = input
+        .known_placeholder_subset
+        .iter()
+        .map(|&(from, to)| (id(from), id(to)))
+        .collect();
+    known_subsets.sort_unstable();
+    known_subsets.dedup();
 
     rocq::app(
-        "Facts",
+        "BorrowckAnnotations",
         vec![
-            rocq::note("universal_region", rocq::list(input.universal_region.iter().map(|o| idx(*o)).collect())),
-            rocq::note("placeholder", pairs(&input.placeholder, |(o, l)| (idx(*o), idx(*l)))),
-            rocq::note("known_placeholder_subset", pairs(&input.known_placeholder_subset, |(a, b)| (idx(*a), idx(*b)))),
-            rocq::note("loan_issued_at", triples(&input.loan_issued_at, |(o, l, p)| (idx(*o), idx(*l), pt(*p)))),
-            rocq::note("loan_killed_at", pairs(&input.loan_killed_at, |(l, p)| (idx(*l), pt(*p)))),
-            rocq::note("loan_invalidated_at", pairs(&input.loan_invalidated_at, |(p, l)| (pt(*p), idx(*l)))),
-            rocq::note("subset_base", triples(&input.subset_base, |(a, b, p)| (idx(*a), idx(*b), pt(*p)))),
-            rocq::note("var_used_at", pairs(&input.var_used_at, |(v, p)| (idx(*v), pt(*p)))),
-            rocq::note("var_defined_at", pairs(&input.var_defined_at, |(v, p)| (idx(*v), pt(*p)))),
-            rocq::note("var_dropped_at", pairs(&input.var_dropped_at, |(v, p)| (idx(*v), pt(*p)))),
-            rocq::note("use_of_var_derefs_origin", pairs(&input.use_of_var_derefs_origin, |(v, o)| (idx(*v), idx(*o)))),
-            rocq::note("drop_of_var_derefs_origin", pairs(&input.drop_of_var_derefs_origin, |(v, o)| (idx(*v), idx(*o)))),
-            rocq::note("child_path", pairs(&input.child_path, |(c, p)| (idx(*c), idx(*p)))),
-            rocq::note("path_is_var", pairs(&input.path_is_var, |(p, v)| (idx(*p), idx(*v)))),
-            rocq::note("path_assigned_at_base", pairs(&input.path_assigned_at_base, |(p, q)| (idx(*p), pt(*q)))),
-            rocq::note("path_moved_at_base", pairs(&input.path_moved_at_base, |(p, q)| (idx(*p), pt(*q)))),
-            rocq::note("path_accessed_at_base", pairs(&input.path_accessed_at_base, |(p, q)| (idx(*p), pt(*q)))),
+            rocq::note(
+                "universal regions",
+                rocq::list(universal.into_iter().map(|n| rocq::nat(n as u64)).collect()),
+            ),
+            rocq::note(
+                "placeholders",
+                rocq::list(
+                    placeholders
+                        .into_iter()
+                        .map(|(o, l)| rocq::pair(rocq::nat(o as u64), rocq::nat(l as u64)))
+                        .collect(),
+                ),
+            ),
+            rocq::note(
+                "known placeholder subsets",
+                rocq::list(
+                    known_subsets
+                        .into_iter()
+                        .map(|(a, b)| rocq::pair(rocq::nat(a as u64), rocq::nat(b as u64)))
+                        .collect(),
+                ),
+            ),
+            rocq::note(
+                "loan starts",
+                rocq::list(
+                    starts
+                        .into_iter()
+                        .map(|(origin, loan, at)| {
+                            rocq::app(
+                                "LoanStart",
+                                vec![rocq::nat(origin as u64), rocq::nat(loan as u64), at.term()],
+                            )
+                        })
+                        .collect(),
+                ),
+            ),
+            rocq::note(
+                "loan ends",
+                rocq::list(
+                    ends.into_iter()
+                        .map(|(loan, from, to)| {
+                            rocq::app(
+                                "LoanEnd",
+                                vec![
+                                    rocq::nat(loan as u64),
+                                    from.term(),
+                                    rocq::option(to.map(Point::term)),
+                                ],
+                            )
+                        })
+                        .collect(),
+                ),
+            ),
         ],
     )
 }
 
-pub fn empty_facts() -> Term {
+pub fn empty_annotations() -> Term {
     rocq::app(
-        "Facts",
-        RELATIONS.iter().map(|r| rocq::note(*r, rocq::list(vec![]))).collect(),
-    )
-}
-
-fn point(rich: RichLocation) -> Term {
-    let (ctor, loc) = match rich {
-        RichLocation::Start(l) => ("PtStart", l),
-        RichLocation::Mid(l) => ("PtMid", l),
-    };
-    rocq::app(
-        ctor,
+        "BorrowckAnnotations",
         vec![
-            rocq::nat(loc.block.as_u32() as u64),
-            rocq::nat(loc.statement_index as u64),
+            rocq::list(vec![]),
+            rocq::list(vec![]),
+            rocq::list(vec![]),
+            rocq::list(vec![]),
+            rocq::list(vec![]),
         ],
     )
 }
 
-fn idx(i: impl Into<u32>) -> Term {
-    rocq::nat(i.into() as u64)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn pairs<T>(items: &[T], f: impl Fn(&T) -> (Term, Term)) -> Term {
-    rocq::list(
-        items
-            .iter()
-            .map(|t| {
-                let (a, b) = f(t);
-                rocq::pair(a, b)
-            })
-            .collect(),
-    )
-}
+    fn p(n: Id) -> Point {
+        Point::Start(0, n as usize)
+    }
 
-fn triples<T>(items: &[T], f: impl Fn(&T) -> (Term, Term, Term)) -> Term {
-    rocq::list(
-        items
-            .iter()
-            .map(|t| {
-                let (a, b, c) = f(t);
-                rocq::triple(a, b, c)
-            })
-            .collect(),
-    )
+    #[test]
+    fn killed_loan_stays_live_while_containing_origin_is_live() {
+        let mut requires = RegionLoans::new();
+        requires
+            .entry(p(0))
+            .or_default()
+            .entry(1)
+            .or_default()
+            .insert(7);
+        let killed = BTreeSet::from([(7, p(0))]);
+        let edges = BTreeSet::from([(p(0), p(1)), (p(1), p(2))]);
+        let origin_live =
+            BTreeMap::from([(p(1), BTreeSet::from([1])), (p(2), BTreeSet::from([1]))]);
+
+        let live = zombie_loans(
+            &requires,
+            &killed,
+            &edges,
+            &origin_live,
+            &RegionSubsets::new(),
+        );
+        assert_eq!(live.get(&p(1)), Some(&BTreeSet::from([7])));
+        assert_eq!(live.get(&p(2)), Some(&BTreeSet::from([7])));
+    }
+
+    #[test]
+    fn zombie_loan_propagates_through_region_subset() {
+        let mut requires = RegionLoans::new();
+        requires
+            .entry(p(0))
+            .or_default()
+            .entry(1)
+            .or_default()
+            .insert(7);
+        let killed = BTreeSet::from([(7, p(0))]);
+        let edges = BTreeSet::from([(p(0), p(1)), (p(1), p(2))]);
+        let origin_live =
+            BTreeMap::from([(p(1), BTreeSet::from([1, 2])), (p(2), BTreeSet::from([2]))]);
+        let subsets = BTreeMap::from([(p(1), BTreeMap::from([(1, BTreeSet::from([2]))]))]);
+
+        let live = zombie_loans(&requires, &killed, &edges, &origin_live, &subsets);
+        assert_eq!(live.get(&p(2)), Some(&BTreeSet::from([7])));
+    }
+
+    #[test]
+    fn loan_ending_is_specific_to_the_edge_where_it_dies() {
+        let live = BTreeMap::from([
+            (p(0), BTreeSet::from([7])),
+            (p(1), BTreeSet::from([7])),
+        ]);
+        let edges = BTreeSet::from([(p(0), p(1)), (p(0), p(2))]);
+
+        let ends = loan_ends(&live, &edges);
+        assert!(ends.contains(&(7, p(0), Some(p(2)))));
+        assert!(!ends.contains(&(7, p(0), Some(p(1)))));
+        assert!(ends.contains(&(7, p(1), None)));
+    }
 }

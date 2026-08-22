@@ -13,7 +13,7 @@ impl<'tcx> Cx<'tcx> {
         def_id: DefId,
         name: &str,
         body: &mir::Body<'tcx>,
-        facts: Term,
+        borrowck: Term,
     ) -> Term {
         self.set_file(self.span_file(body.span));
         let names = debug_names(body);
@@ -80,7 +80,7 @@ impl<'tcx> Cx<'tcx> {
                     "regions",
                     rocq::list(self.take_regions().into_iter().map(rocq::nat).collect()),
                 ),
-                rocq::note("polonius", facts),
+                rocq::note("borrowck annotations", borrowck),
             ],
         )
     }
