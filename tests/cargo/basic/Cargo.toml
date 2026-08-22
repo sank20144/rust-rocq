@@ -1,0 +1,10 @@
+[package]
+name = "cargo_input"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cargo_helper = { path = "helper" }
+
+[workspace]
+members = ["helper"]

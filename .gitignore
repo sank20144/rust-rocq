@@ -1,4 +1,5 @@
 /target
+tests/cargo/**/target/
 **/*.rs.bk
 
 *.vo

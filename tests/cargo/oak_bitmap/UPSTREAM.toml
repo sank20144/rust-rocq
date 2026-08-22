@@ -1,0 +1,8 @@
+repository = "https://github.com/project-oak/oak"
+commit = "b7f7d812f18e6350d23e1407ecbe3894a5676ea3"
+path = "oak_restricted_kernel/src/mm/bitmap_frame_allocator.rs"
+sha256 = "d881577b60625cb1bc99b256f2aade8490e9d805b1a679a62082bea24183e07b"
+
+translate_cfg_test = false
+
+x86_64_fixture_version = "0.14.13"

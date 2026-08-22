@@ -1,0 +1,20 @@
+<bitmap_frame_allocator::BitmapAllocator<S, N/#1> as core::fmt::Debug>::fmt
+<bitmap_frame_allocator::BitmapAllocator<S, N/#1> as x86_64::structures::paging::FrameAllocator<S>>::allocate_frame
+<bitmap_frame_allocator::BitmapAllocator<S, N/#1> as x86_64::structures::paging::FrameDeallocator<S>>::deallocate_frame
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::allocate
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::allocate_contiguous
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::allocate_contiguous::{closure#0}
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::allocate_contiguous::{closure#1}
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::available
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::frame
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::frame_idx
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::largest_available
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::largest_available::{closure#0}
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::largest_available::{closure#0}::{closure#0}
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::largest_available::{closure#0}::{closure#1}
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::largest_available::{closure#1}
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::largest_available::{closure#2}
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::mark_valid
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::new
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::num_allocated
+bitmap_frame_allocator::BitmapAllocator::<S, N/#1>::num_valid
