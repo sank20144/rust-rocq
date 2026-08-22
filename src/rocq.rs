@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 const WIDTH: usize = 96;
@@ -51,6 +52,7 @@ pub fn pair(a: Term, b: Term) -> Term {
     Term::Tuple(vec![a, b])
 }
 
+#[cfg(test)]
 pub fn triple(a: Term, b: Term, c: Term) -> Term {
     Term::Tuple(vec![a, b, c])
 }
@@ -67,6 +69,27 @@ pub fn note(label: impl Into<String>, t: Term) -> Term {
 }
 
 impl Term {
+    pub fn collect_heads(&self, heads: &mut BTreeSet<String>) {
+        match self {
+            Term::Atom(atom) => {
+                heads.insert(atom.clone());
+            }
+            Term::App(head, args) => {
+                heads.insert(head.clone());
+                for arg in args {
+                    arg.collect_heads(heads);
+                }
+            }
+            Term::List(items) | Term::Tuple(items) => {
+                for item in items {
+                    item.collect_heads(heads);
+                }
+            }
+            Term::Note(_, term) => term.collect_heads(heads),
+            Term::Str(_) | Term::Nat(_) | Term::Int(_) | Term::Bool(_) => {}
+        }
+    }
+
     pub fn render(&self) -> String {
         self.render_at(0)
     }
@@ -305,5 +328,16 @@ mod tests {
         assert!(out.starts_with("[ BasicBlock 0\n"), "{out}");
         assert!(out.contains("\n; BasicBlock 1"), "{out}");
         assert!(out.ends_with("\n]"), "{out}");
+    }
+
+    #[test]
+    fn constructor_coverage_ignores_data_and_comments() {
+        let t = note(
+            "ignored",
+            app("Body", vec![app("TInt", vec![atom("W32")]), string("TBool")]),
+        );
+        let mut heads = BTreeSet::new();
+        t.collect_heads(&mut heads);
+        assert_eq!(heads.into_iter().collect::<Vec<_>>(), vec!["Body", "TInt", "W32"]);
     }
 }
