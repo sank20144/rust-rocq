@@ -3,8 +3,8 @@
 Translates Rust MIR into Rocq.
 
 The frontend is a rustc driver that reads the borrow-checked MIR body and emits
-Rocq terms of the syntax in `theories/Syntax.v`. Polonius region and loan facts
-are attached to each body.
+Rocq terms of the syntax in `theories/Syntax.v`. It also runs Polonius and turns
+its output into loan start and loan end annotations for each body.
 
 ## Requirements
 
@@ -61,10 +61,38 @@ standalone `.rs` file works but a Cargo project's dependencies are not resolved.
 Other arguments are passed to rustc, for example `--edition 2024`. The defaults
 are `--crate-type=lib --edition=2021`.
 
+## Translate a Cargo project
+
+Build both frontend executables, put them on Cargo's command search path, and
+run the `rocq` Cargo subcommand in the project to translate:
+
+    cargo build --bins
+    PATH="$PWD/target/debug:$PATH" cargo rocq --rocq-out out/my-project -- \
+        --manifest-path path/to/Cargo.toml
+
+`cargo rocq` runs `cargo check` with `rust-rocq` as the Rust compiler. Cargo
+reads the project's own `Cargo.toml` and `Cargo.lock`, builds its dependencies,
+runs build scripts, and passes the frontend the edition, features, target and
+`--extern` arguments.
+
+Only Cargo's primary packages are translated by default; dependencies are
+compiled normally. Pass `--include-deps` before `--` to translate dependency
+crates too. Options after `--` are passed to `cargo check`.
+
+Each translated crate produces four files:
+
+- `<crate>.v`, the Rocq translation
+- `<crate>.mir`, the borrow-checked MIR that was translated
+- `<crate>.bodies`, the exact set of translated body names
+- `<crate>.constructs`, the exact set of Rocq constructors used
+
+Output goes to a separate directory for each crate and Cargo metadata hash, so
+compiler runs with different configurations do not overwrite each other.
+
 ## Check
 
     ./check.sh
 
 Translates every input under `tests/inputs` and compiles each result against
-`theories/Syntax.v`. Reports the size of each output and how many constructs the
-translation could not represent, which should be zero.
+`theories/Syntax.v`. It also translates the Cargo projects under `tests/cargo`.
+It reports how many constructs could not be translated, which should be zero.
