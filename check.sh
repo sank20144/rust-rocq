@@ -27,6 +27,11 @@ fi
 
 rocq makefile -f _RocqProject -o Makefile >/dev/null && make -s
 
+if grep -rn 'Admitted\.\|^[[:space:]]*admit\.' theories tests --include='*.v'; then
+    echo "FAIL (admitted proof)" >&2
+    exit 1
+fi
+
 rm -rf "$out"
 fail=0
 for input in tests/inputs/*.rs; do
@@ -58,7 +63,17 @@ for input in tests/inputs/*.rs; do
     lines=$(wc -c <"$generated")
     mir=$(wc -c <"${generated%.v}.mir")
 
-    echo "ok  ${lines} bytes rocq, ${mir} bytes mir, ${holes} unrepresented"
+    if [ -f "tests/$name.v" ]; then
+        if rocq compile -Q theories RustRocq -Q "$out/$name" Generated "tests/$name.v" 2>"$out.err"; then
+            checks="checked"
+        else
+            echo "FAIL (tests/$name.v)"; head -20 "$out.err"; fail=1; continue
+        fi
+    else
+        checks="no checks"
+    fi
+
+    echo "ok  ${lines} bytes rocq, ${mir} bytes mir, ${holes} unrepresented, ${checks}"
 done
 
 check_cargo_fixture() {
