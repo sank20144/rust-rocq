@@ -296,6 +296,42 @@ Definition local_ty (b : body) (n : nat) : ty :=
   | None => TError "no such local"
   end.
 
+Fixpoint has_storage_live (l : local) (ss : list statement) : bool :=
+  match ss with
+  | [] => false
+  | s :: rest =>
+      match st_kind s with
+      | SStorageLive l' => Nat.eqb l l' || has_storage_live l rest
+      | _ => has_storage_live l rest
+      end
+  end.
+
+Definition always_live (b : body) (l : local) : bool :=
+  negb (existsb (fun blk => has_storage_live l (bb_stmts blk)) (bd_blocks b)).
+
+Definition allocate_at_entry (env : layout_env) (b : body) (l : local)
+    (st : prog_state) : option prog_state :=
+  match shape_of_layout_ty (local_ty b l) with
+  | Some sh => storage_live_local_with_layouts env sh l st
+  | None => Some st
+  end.
+
+Definition free_frame (env : layout_env) (b : body) : M unit :=
+  fun st =>
+    let step acc l :=
+      match acc with
+      | Some s =>
+          match nth_error (state_locals s) l with
+          | Some (LocalAllocated _) => storage_dead_local_with_layouts env l s
+          | _ => Some s
+          end
+      | None => None
+      end in
+    match fold_left step (seq 0 (length (bd_locals b))) (Some st) with
+    | Some st' => Ok tt st'
+    | None => Unmodelled "free the frame at return"
+    end.
+
 Definition denote_statement (env : layout_env) (b : body) (s : statement) : M unit :=
   match st_kind s with
   | SAssign p r =>
@@ -347,7 +383,10 @@ Definition scalar_of (v : runtime_value) : option Z :=
 Definition denote_terminator (env : layout_env) (b : body) (t : terminator) : M (block_id + result) :=
   match tm_kind t with
   | TGoto n => ret (inl n)
-  | TReturn => v <- read env (Place 0 []) ;; ret (inr (Returned v))
+  | TReturn =>
+      v <- read env (Place 0 []) ;;
+      free_frame env b ;;;
+      ret (inr (Returned v))
   | TSwitchInt d ts o =>
       v <- denote_operand env d ;;
       match scalar_of v with
@@ -404,22 +443,34 @@ Fixpoint args_match (b : body) (i : nat) (args : list runtime_value) : bool :=
       end
   end.
 
-Definition entry_state (b : body) (args : list runtime_value) : prog_state :=
-  local_state
-    (Uninit ::
-     map (fun i => match nth_error args i with
-                   | Some v => Init v
-                   | None => Uninit
-                   end)
-         (seq 0 (bd_arg_count b))
-     ++ repeat Uninit (length (bd_locals b) - S (bd_arg_count b))).
+Definition entry_state (env : layout_env) (b : body) (args : list runtime_value)
+    : option prog_state :=
+  let base :=
+    local_state
+      (Uninit ::
+       map (fun i => match nth_error args i with
+                     | Some v => Init v
+                     | None => Uninit
+                     end)
+           (seq 0 (bd_arg_count b))
+       ++ repeat Uninit (length (bd_locals b) - S (bd_arg_count b))) in
+  let rest := seq (S (bd_arg_count b)) (length (bd_locals b) - S (bd_arg_count b)) in
+  let live := 0 :: filter (always_live b) rest in
+  fold_left (fun acc l => match acc with
+                          | Some st => allocate_at_entry env b l st
+                          | None => None
+                          end)
+            live (Some base).
 
 Definition run (b : body) (args : list runtime_value) : delay (outcome result) :=
   if negb (Nat.eqb (length args) (bd_arg_count b))
   then Now (Mismatch "wrong number of arguments")
   else if negb (args_match b 0 args)
   then Now (Mismatch "argument does not match the declared type")
-  else denote_body b (entry_state b args).
+  else match entry_state (layouts_of_body b) b args with
+       | Some st => denote_body b st
+       | None => Now (Unmodelled "allocate the frame at entry")
+       end.
 
 Definition run_at (b : body) (targs : list garg)
     (args : list runtime_value) : delay (outcome result) :=

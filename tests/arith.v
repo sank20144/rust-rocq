@@ -49,3 +49,23 @@ Example a_copy_leaves_its_source_alone :
   end
   = (VBits W32 7, AccessOk (VBits W32 7)).
 Proof. vm_compute. reflexivity. Qed.
+
+Example the_return_place_is_allocated_at_entry :
+  match entry_state (layouts_of_body add) add [VBits W32 2; VBits W32 3] with
+  | Some st =>
+      match nth_error (state_locals st) 0%nat with
+      | Some (LocalAllocated _) => true
+      | _ => false
+      end
+  | None => false
+  end = true.
+Proof. vm_compute. reflexivity. Qed.
+
+Example the_frame_is_freed_at_return :
+  match peek 20%nat (run add [VBits W32 2; VBits W32 3]) with
+  | Some (Ok _ st) =>
+      forallb (fun s => match s with LocalAllocated _ => false | _ => true end)
+              (state_locals st)
+  | _ => false
+  end = true.
+Proof. vm_compute. reflexivity. Qed.
