@@ -1,7 +1,9 @@
+AdtDef
 AgAdt
 AgArray
 AgClosure
 AgTuple
+AkStruct
 AsDivisionByZero
 AsOverflow
 BAdd
@@ -106,6 +108,7 @@ TUnreachable
 TUnwindResume
 Term
 UaCleanup
+VariantDef
 W16
 W32
 W64

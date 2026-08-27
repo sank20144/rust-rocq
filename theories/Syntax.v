@@ -360,6 +360,22 @@ Record impl_def := ImplDef {
   ip_negative : bool;
 }.
 
+Inductive adt_kind := AkStruct | AkEnum | AkUnion.
+
+Record variant_def := VariantDef {
+  vd_name : name;
+  vd_index : variant;
+  vd_fields : list (name * ty);
+}.
+
+Record adt_def := AdtDef {
+  ad_path : name;
+  ad_kind : adt_kind;
+  ad_generics : list generic_param;
+  ad_variants : list variant_def;
+  ad_repr : list name;
+}.
+
 Definition origin := nat.
 Definition loan := nat.
 

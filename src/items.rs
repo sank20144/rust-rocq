@@ -5,9 +5,14 @@ use rustc_middle::ty;
 use crate::rocq::{self, Term};
 use crate::ty::Cx;
 
-pub fn collect(cx: &Cx<'_>) -> (Vec<Term>, Vec<Term>) {
-    let mut traits = Vec::new();
-    let mut impls = Vec::new();
+pub struct Items {
+    pub adts: Vec<Term>,
+    pub traits: Vec<Term>,
+    pub impls: Vec<Term>,
+}
+
+pub fn collect(cx: &Cx<'_>) -> Items {
+    let mut items = Items { adts: Vec::new(), traits: Vec::new(), impls: Vec::new() };
 
     let mut ids: Vec<_> = cx.tcx.hir_crate_items(()).definitions().collect();
     ids.sort_by_key(|id| id.local_def_index.as_u32());
@@ -15,17 +20,83 @@ pub fn collect(cx: &Cx<'_>) -> (Vec<Term>, Vec<Term>) {
     for local in ids {
         let def_id = local.to_def_id();
         match cx.tcx.def_kind(local) {
-            DefKind::Trait => traits.push(cx.trait_def(def_id)),
-            DefKind::Impl { of_trait: true } => impls.push(cx.impl_def(def_id)),
+            DefKind::Struct | DefKind::Enum | DefKind::Union => {
+                items.adts.push(cx.adt_def(def_id))
+            }
+            DefKind::Trait => items.traits.push(cx.trait_def(def_id)),
+            DefKind::Impl { of_trait: true } => items.impls.push(cx.impl_def(def_id)),
             _ => {}
         }
     }
 
     let _ = cx.take_regions();
-    (traits, impls)
+    items
 }
 
 impl<'tcx> Cx<'tcx> {
+    fn adt_def(&self, def_id: DefId) -> Term {
+        let adt = self.tcx.adt_def(def_id);
+        let kind = if adt.is_enum() {
+            "AkEnum"
+        } else if adt.is_union() {
+            "AkUnion"
+        } else {
+            "AkStruct"
+        };
+
+        let variants: Vec<Term> = adt
+            .variants()
+            .iter_enumerated()
+            .map(|(idx, v)| {
+                let fields: Vec<Term> = v
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        let t = self.tcx.type_of(f.did).skip_binder();
+                        rocq::pair(rocq::string(f.name.to_string()), self.ty(t))
+                    })
+                    .collect();
+                rocq::app(
+                    "VariantDef",
+                    vec![
+                        rocq::string(v.name.to_string()),
+                        rocq::nat(idx.as_u32()),
+                        rocq::list(fields),
+                    ],
+                )
+            })
+            .collect();
+
+        let repr = adt.repr();
+        let mut reprs = Vec::new();
+        if repr.c() {
+            reprs.push(rocq::string("C"));
+        }
+        if repr.transparent() {
+            reprs.push(rocq::string("transparent"));
+        }
+        if repr.packed() {
+            reprs.push(rocq::string("packed"));
+        }
+        if let Some(int) = repr.int {
+            reprs.push(rocq::string(format!("{int:?}")));
+        }
+
+        rocq::note(
+            self.tcx.def_path_str(def_id),
+            rocq::app(
+                "AdtDef",
+                vec![
+                    rocq::note("path", self.path(def_id)),
+                    rocq::note("kind", rocq::atom(kind)),
+                    rocq::note("generics", self.generics(def_id)),
+                    rocq::note("variants", rocq::list(variants)),
+                    rocq::note("repr", rocq::list(reprs)),
+                ],
+            ),
+        )
+    }
+
     fn trait_def(&self, def_id: DefId) -> Term {
         rocq::note(
             self.tcx.def_path_str(def_id),

@@ -51,7 +51,7 @@ Example a_copy_leaves_its_source_alone :
 Proof. vm_compute. reflexivity. Qed.
 
 Example the_return_place_is_allocated_at_entry :
-  match entry_state (layouts_of_body add) add [VBits W32 2; VBits W32 3] with
+  match entry_state (layouts_of_body [] add) add [VBits W32 2; VBits W32 3] with
   | Some st =>
       match nth_error (state_locals st) 0%nat with
       | Some (LocalAllocated _) => true

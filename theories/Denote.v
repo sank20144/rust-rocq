@@ -1,4 +1,4 @@
-From RustRocq Require Import Syntax Layout Memory Subst.
+From RustRocq Require Import Syntax Layout Memory Subst LayoutAlg.
 From Stdlib Require Import String List ZArith.
 Import ListNotations.
 
@@ -73,65 +73,9 @@ Inductive Terminates {A} : delay A -> A -> Prop :=
 CoInductive Diverges {A} : delay A -> Prop :=
   | DLater : forall d, Diverges d -> Diverges (Later d).
 
-Fixpoint packed_offsets (at_ : nat) (ts : list ty) : list nat :=
-  match ts with
-  | [] => []
-  | t :: rest =>
-      let sz := match shape_of_layout_ty t with
-                | Some sh => shape_size_with_layouts [] sh
-                | None => 0%nat
-                end in
-      at_ :: packed_offsets (at_ + sz) rest
-  end.
-
-Definition packed_layout (t : ty) (sh : value_shape) : type_layout :=
-  let fields := match t with
-                | TTuple ts => ts
-                | TAdt _ _ => []
-                | _ => []
-                end in
-  let fl := match t with
-            | TTuple ts => FieldsArbitrary (packed_offsets 0%nat ts)
-            | TArray e n =>
-                FieldsArray (match shape_of_layout_ty e with
-                             | Some esh => shape_size_with_layouts [] esh
-                             | None => 0%nat
-                             end)
-                            (match const_nat n with Some k => k | None => 0%nat end)
-            | _ => FieldsPrimitive
-            end in
-  TypeLayoutData "packed" t
-    (shape_size_with_layouts [] sh) (shape_align_with_layouts [] sh)
-    false fields fl (VariantsSingle 0%nat) (AbiMemory true).
-
-Fixpoint shapes_of (fuel : nat) (t : ty) : list (ty * value_shape) :=
-  match fuel with
-  | 0%nat => []
-  | S f =>
-      let here := match shape_of_layout_ty t with
-                  | Some sh => [(t, sh)]
-                  | None => []
-                  end in
-      let inner := match t with
-                   | TTuple ts => concat (map (shapes_of f) ts)
-                   | TArray e _ | TSlice e => shapes_of f e
-                   | TRef _ p _ | TRawPtr p _ => shapes_of f p
-                   | _ => []
-                   end in
-      here ++ inner
-  end.
-
-Fixpoint dedup (acc : list ty) (xs : list (ty * value_shape)) : list type_layout :=
-  match xs with
-  | [] => []
-  | (t, sh) :: rest =>
-      if existsb (ty_eqb t) acc
-      then dedup acc rest
-      else packed_layout t sh :: dedup (t :: acc) rest
-  end.
-
-Definition layouts_of_body (b : body) : layout_env :=
-  dedup [] (concat (map (fun d => shapes_of 32%nat (ld_ty d)) (bd_locals b))).
+Definition layouts_of_body `{Alg : LayoutAlg} (adts : list adt_def) (b : body)
+    : layout_env :=
+  layout_env_of adts (map ld_ty (bd_locals b)).
 
 Definition read (env : layout_env) (p : place) : M runtime_value :=
   fun st => of_access "read place" (read_place_result_with_layouts env p st) st.
@@ -141,35 +85,6 @@ Definition write (env : layout_env) (p : place) (v : runtime_value) : M unit :=
             | Some st' => Ok tt st'
             | None => Unmodelled "write place"
             end.
-
-Definition const_value (t : ty) (v : const_value) : M runtime_value :=
-  match v, t with
-  | CvScalar (ScInt z _), TBool => ret (VBool (negb (Z.eqb z 0%Z)))
-  | CvScalar (ScInt z _), TChar => ret (VChar z)
-  | CvScalar (ScInt z _), TInt w => ret (VBits w z)
-  | CvScalar (ScInt z _), TUint w => ret (VBits w z)
-  | CvZeroSized, _ => ret VUnit
-  | _, _ => fail "constant outside the fragment"
-  end.
-
-Definition denote_const (c : const_op) : M runtime_value :=
-  match co_const c with
-  | KVal v t => const_value t v
-  | _ => fail "unevaluated constant"
-  end.
-
-Definition denote_operand (env : layout_env) (o : operand) : M runtime_value :=
-  match o with
-  | OCopy p => read env p
-  | OMove p =>
-      v <- read env p ;;
-      fun st => match deinitialize_place_with_layouts env p st with
-                | Some st' => Ok v st'
-                | None => Unmodelled "deinitialise at move"
-                end
-  | OConst c => denote_const c
-  | ORuntimeCheck _ => ret (VBool true)
-  end.
 
 Definition bits_of (t : ty) : option (int_width * bool) :=
   match t with
@@ -198,6 +113,35 @@ Definition overflows (w : int_width) (signed : bool) (z : Z) : bool :=
   then let h := Z.pow 2%Z (Z.sub (width_bits w) 1%Z) in
        orb (Z.ltb z (Z.opp h)) (Z.leb h z)
   else orb (Z.ltb z 0) (Z.leb (Z.pow 2%Z (width_bits w)) z).
+
+Definition const_value (t : ty) (v : const_value) : M runtime_value :=
+  match v, t with
+  | CvScalar (ScInt z _), TBool => ret (VBool (negb (Z.eqb z 0%Z)))
+  | CvScalar (ScInt z _), TChar => ret (VChar z)
+  | CvScalar (ScInt z _), TInt w => ret (VBits w (wrap w true z))
+  | CvScalar (ScInt z _), TUint w => ret (VBits w (wrap w false z))
+  | CvZeroSized, _ => ret VUnit
+  | _, _ => fail "constant outside the fragment"
+  end.
+
+Definition denote_const (c : const_op) : M runtime_value :=
+  match co_const c with
+  | KVal v t => const_value t v
+  | _ => fail "unevaluated constant"
+  end.
+
+Definition denote_operand (env : layout_env) (o : operand) : M runtime_value :=
+  match o with
+  | OCopy p => read env p
+  | OMove p =>
+      v <- read env p ;;
+      fun st => match deinitialize_place_with_layouts env p st with
+                | Some st' => Ok v st'
+                | None => Unmodelled "deinitialise at move"
+                end
+  | OConst c => denote_const c
+  | ORuntimeCheck _ => ret (VBool true)
+  end.
 
 Definition field_ty (t : ty) (i : nat) : ty :=
   match t with TTuple ts => nth i ts (TError "no such field") | _ => t end.
@@ -268,6 +212,16 @@ Definition denote_unop (dst : ty) (op : un_op) (v : runtime_value)
   | _, _ => fail "unary operator outside the fragment"
   end.
 
+Fixpoint denote_operands (env : layout_env) (os : list operand)
+    : M (list runtime_value) :=
+  match os with
+  | [] => ret []
+  | o :: rest =>
+      v <- denote_operand env o ;;
+      vs <- denote_operands env rest ;;
+      ret (v :: vs)
+  end.
+
 Definition denote_rvalue (env : layout_env) (dst : ty) (r : rvalue) : M runtime_value :=
   match r with
   | RUse o _ => denote_operand env o
@@ -282,11 +236,20 @@ Definition denote_rvalue (env : layout_env) (dst : ty) (r : rvalue) : M runtime_
                 | None => Unmodelled "address of place"
                 end
   | RAggregate AgTuple fs =>
-      (fix go (os : list operand) (acc : list runtime_value) : M runtime_value :=
-         match os with
-         | [] => ret (VTuple (rev acc))
-         | o :: rest => v <- denote_operand env o ;; go rest (v :: acc)
-         end) fs []
+      vs <- denote_operands env fs ;; ret (VTuple vs)
+  | RAggregate (AgAdt path v _ None) fs =>
+      vs <- denote_operands env fs ;; ret (VAdt path v vs)
+  | RAggregate (AgAdt _ _ _ (Some _)) _ => fail "union aggregate"
+  | RDiscriminant p =>
+      v <- read env p ;;
+      match v with
+      | VAdt _ k _ =>
+          match bits_of dst with
+          | Some (w, _) => ret (VBits w (Z.of_nat k))
+          | None => fail "discriminant into a non-integer destination"
+          end
+      | _ => fail "discriminant of a non-enum value"
+      end
   | _ => fail "rvalue outside the fragment"
   end.
 
@@ -312,6 +275,11 @@ Definition always_live (b : body) (l : local) : bool :=
 Definition allocate_at_entry (env : layout_env) (b : body) (l : local)
     (st : prog_state) : option prog_state :=
   match shape_of_layout_ty (local_ty b l) with
+  | Some (ShapeAdtType t) =>
+      match find_type_layout env t with
+      | Some _ => storage_live_local_with_layouts env (ShapeAdtType t) l st
+      | None => Some st
+      end
   | Some sh => storage_live_local_with_layouts env sh l st
   | None => Some st
   end.
@@ -348,6 +316,12 @@ Definition denote_statement (env : layout_env) (b : body) (s : statement) : M un
                 | Some st' => Ok tt st'
                 | None => Unmodelled "storage dead"
                 end
+  | SSetDiscriminant p v =>
+      cur <- read env p ;;
+      match cur with
+      | VAdt d _ fs => write env p (VAdt d v fs)
+      | _ => fail "set discriminant on a non-enum value"
+      end
   | SFakeRead _ _ | SAscribeUserType _ _ _ | SPlaceMention _
   | SNop | SConstEvalCounter | SCoverage _
   | SBackwardIncompatibleDropHint _ _ => ret tt
@@ -430,8 +404,9 @@ Definition denote_block (env : layout_env) (b : body) (n : block_id) : M (block_
       denote_terminator env b (bb_term blk)
   end.
 
-Definition denote_body (b : body) (st : prog_state) : delay (outcome result) :=
-  drive (denote_block (layouts_of_body b) b) 0 st.
+Definition denote_body `{Alg : LayoutAlg} (adts : list adt_def) (b : body) (st : prog_state)
+    : delay (outcome result) :=
+  drive (denote_block (layouts_of_body adts b) b) 0 st.
 
 Fixpoint args_match (b : body) (i : nat) (args : list runtime_value) : bool :=
   match args with
@@ -445,34 +420,38 @@ Fixpoint args_match (b : body) (i : nat) (args : list runtime_value) : bool :=
 
 Definition entry_state (env : layout_env) (b : body) (args : list runtime_value)
     : option prog_state :=
-  let base :=
-    local_state
-      (Uninit ::
-       map (fun i => match nth_error args i with
-                     | Some v => Init v
-                     | None => Uninit
-                     end)
-           (seq 0 (bd_arg_count b))
-       ++ repeat Uninit (length (bd_locals b) - S (bd_arg_count b))) in
-  let rest := seq (S (bd_arg_count b)) (length (bd_locals b) - S (bd_arg_count b)) in
-  let live := 0 :: filter (always_live b) rest in
-  fold_left (fun acc l => match acc with
-                          | Some st => allocate_at_entry env b l st
-                          | None => None
-                          end)
-            live (Some base).
+  let n := length (bd_locals b) in
+  let base := local_state (repeat Uninit n) in
+  let rest := seq (S (bd_arg_count b)) (n - S (bd_arg_count b)) in
+  let live := 0 :: seq 1 (bd_arg_count b) ++ filter (always_live b) rest in
+  let allocated :=
+    fold_left (fun acc l => match acc with
+                            | Some st => allocate_at_entry env b l st
+                            | None => None
+                            end)
+              live (Some base) in
+  fold_left (fun acc (iv : nat * runtime_value) =>
+               match acc with
+               | Some st => write_place_with_layouts env (Place (S (fst iv)) []) (snd iv) st
+               | None => None
+               end)
+            (combine (seq 0 (length args)) args) allocated.
 
-Definition run (b : body) (args : list runtime_value) : delay (outcome result) :=
+Definition run_in `{Alg : LayoutAlg} (adts : list adt_def) (b : body) (args : list runtime_value)
+    : delay (outcome result) :=
   if negb (Nat.eqb (length args) (bd_arg_count b))
   then Now (Mismatch "wrong number of arguments")
   else if negb (args_match b 0 args)
   then Now (Mismatch "argument does not match the declared type")
-  else match entry_state (layouts_of_body b) b args with
-       | Some st => denote_body b st
+  else match entry_state (layouts_of_body adts b) b args with
+       | Some st => denote_body adts b st
        | None => Now (Unmodelled "allocate the frame at entry")
        end.
 
-Definition run_at (b : body) (targs : list garg)
+Definition run `{Alg : LayoutAlg} (b : body) (args : list runtime_value) : delay (outcome result) :=
+  run_in [] b args.
+
+Definition run_at `{Alg : LayoutAlg} (b : body) (targs : list garg)
     (args : list runtime_value) : delay (outcome result) :=
   run (subst_body targs b) args.
 
@@ -523,26 +502,40 @@ Definition answer_of (o : outcome result) : answer :=
   | Mismatch w => AMismatch w
   end.
 
-Definition Means (b : body) (args : list runtime_value) (a : answer) : Prop :=
-  exists o, Terminates (run b args) o /\ answer_of o = a.
+Definition MeansIn `{Alg : LayoutAlg} (adts : list adt_def) (b : body) (args : list runtime_value)
+    (a : answer) : Prop :=
+  exists o, Terminates (run_in adts b args) o /\ answer_of o = a.
 
-Definition MeansAt (b : body) (targs : list garg)
+Definition Means `{Alg : LayoutAlg} (b : body) (args : list runtime_value) (a : answer) : Prop :=
+  MeansIn [] b args a.
+
+Definition MeansAt `{Alg : LayoutAlg} (b : body) (targs : list garg)
     (args : list runtime_value) (a : answer) : Prop :=
   Means (subst_body targs b) args a.
 
-Theorem means_deterministic :
-  forall b args a a', Means b args a -> Means b args a' -> a = a'.
+Theorem means_in_deterministic `{Alg : LayoutAlg} :
+  forall adts b args a a', MeansIn adts b args a -> MeansIn adts b args a' -> a = a'.
 Proof.
-  intros b args a a' [o [Ht Ha]] [o' [Ht' Ha']].
+  intros adts b args a a' [o [Ht Ha]] [o' [Ht' Ha']].
   rewrite (terminates_deterministic _ _ _ Ht Ht') in Ha. congruence.
 Qed.
 
-Lemma means_within (n : nat) :
+Theorem means_deterministic `{Alg : LayoutAlg} :
+  forall b args a a', Means b args a -> Means b args a' -> a = a'.
+Proof. intros; eapply means_in_deterministic; eauto. Qed.
+
+Lemma means_within_in `{Alg : LayoutAlg} (adts : list adt_def) (n : nat) :
+  forall b args a,
+    option_map answer_of (peek n (run_in adts b args)) = Some a ->
+    MeansIn adts b args a.
+Proof.
+  intros b args a H.
+  destruct (peek n (run_in adts b args)) as [o|] eqn:E; cbn in H; [|discriminate].
+  exists o. split; [ apply (peek_terminates n); exact E | congruence ].
+Qed.
+
+Lemma means_within `{Alg : LayoutAlg} (n : nat) :
   forall b args a,
     option_map answer_of (peek n (run b args)) = Some a ->
     Means b args a.
-Proof.
-  intros b args a H.
-  destruct (peek n (run b args)) as [o|] eqn:E; cbn in H; [|discriminate].
-  exists o. split; [ apply (peek_terminates n); exact E | congruence ].
-Qed.
+Proof. intros. apply (means_within_in [] n). exact H. Qed.

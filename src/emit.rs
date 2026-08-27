@@ -6,6 +6,7 @@ use crate::rocq::Term;
 pub struct Output {
     pub dir: PathBuf,
     entries: Vec<(String, Term)>,
+    adts: Vec<Term>,
     traits: Vec<Term>,
     impls: Vec<Term>,
     mir: String,
@@ -17,6 +18,7 @@ impl Output {
         Output {
             dir: dir.into(),
             entries: Vec::new(),
+            adts: Vec::new(),
             traits: Vec::new(),
             impls: Vec::new(),
             mir: String::new(),
@@ -32,13 +34,17 @@ impl Output {
         self.mir.push_str(&format!("// ---- {name} ----\n{mir}\n"));
     }
 
-    pub fn set_items(&mut self, traits: Vec<Term>, impls: Vec<Term>) {
+    pub fn set_items(&mut self, adts: Vec<Term>, traits: Vec<Term>, impls: Vec<Term>) {
+        self.adts = adts;
         self.traits = traits;
         self.impls = impls;
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty() && self.traits.is_empty() && self.impls.is_empty()
+        self.entries.is_empty()
+            && self.adts.is_empty()
+            && self.traits.is_empty()
+            && self.impls.is_empty()
     }
 
     pub fn set_build_flags(&mut self, flags: Vec<(&'static str, String)>) {
@@ -50,6 +56,9 @@ impl Output {
         let path = self.dir.join(format!("{}.v", ident(crate_name)));
 
         let mut constructors = BTreeSet::new();
+        for term in &self.adts {
+            term.collect_heads(&mut constructors);
+        }
         for term in &self.traits {
             term.collect_heads(&mut constructors);
         }
@@ -78,8 +87,13 @@ impl Output {
         ));
         let _ = source;
 
+        let adts = Term::List(std::mem::take(&mut self.adts));
         let traits = Term::List(std::mem::take(&mut self.traits));
         let impls = Term::List(std::mem::take(&mut self.impls));
+        out.push_str(&format!(
+            "Definition adts : list adt_def :=\n  {}.\n\n",
+            adts.render_at(2)
+        ));
         out.push_str(&format!(
             "Definition traits : list trait_def :=\n  {}.\n\n",
             traits.render_at(2)

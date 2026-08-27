@@ -52,8 +52,8 @@ impl rustc_driver::Callbacks for Frontend {
         let cx = ty::Cx::new(tcx);
         let mut out = emit::Output::new(&self.out_dir);
 
-        let (traits, impls) = items::collect(&cx);
-        out.set_items(traits, impls);
+        let items = items::collect(&cx);
+        out.set_items(items.adts, items.traits, items.impls);
         out.set_build_flags(vec![
             ("overflow-checks", tcx.sess.overflow_checks().to_string()),
             ("debug-assertions", tcx.sess.opts.debug_assertions.to_string()),
