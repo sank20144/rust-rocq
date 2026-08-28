@@ -62,6 +62,10 @@ pub fn borrows(v: &mut Vec<u32>) {
     *first += 1;
 }
 
+pub fn reborrow_out(v: &mut Vec<u32>) -> &mut u32 {
+    &mut v[0]
+}
+
 pub fn largest<T: PartialOrd + Copy>(items: &[T]) -> Option<T> {
     let mut best: Option<T> = None;
     for it in items {

@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use polonius_engine::{Algorithm, Output};
 use rustc_borrowck::consumers::RichLocation;
 
 use crate::rocq::{self, Term};
@@ -143,13 +144,11 @@ fn id(value: impl Into<u32>) -> Id {
 }
 
 pub fn annotations(f: &Facts<'_>) -> Term {
-    let (Some(input), Some(output), Some(table)) = (
-        f.input_facts.as_deref(),
-        f.output_facts.as_deref(),
-        f.location_table.as_ref(),
-    ) else {
+    let (Some(input), Some(table)) = (f.input_facts.as_deref(), f.location_table.as_ref()) else {
         return empty_annotations();
     };
+
+    let output = Output::compute(input, Algorithm::Naive, true);
     let point = |p| Point::from_rich(table.to_rich_location(p));
 
     let mut starts = BTreeSet::new();

@@ -1,5 +1,6 @@
 #![feature(rustc_private)]
 
+extern crate polonius_engine;
 extern crate rustc_borrowck;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
