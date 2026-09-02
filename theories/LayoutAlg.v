@@ -62,7 +62,8 @@ Fixpoint syn_type_of_fuel (fuel : nat) (adts : list adt_def) (t : ty) : syn_type
       | TUint w => StInt w false
       | TFloat w => StFloat w
       | TRef _ p _ | TRawPtr p _ => StPtr (unsized_ty p)
-      | TFnPtr _ | TFnDef _ _ => StFnPtr
+      | TFnPtr _ => StFnPtr
+      | TFnDef _ _ => StUnit
       | TNever => StNever
       | TTuple [] => StUnit
       | TTuple ts => StTuple (map go ts)

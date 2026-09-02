@@ -259,6 +259,7 @@ Fixpoint shape_of_layout_ty_fuel (fuel : nat) (t : ty)
               end
           end
       | TAdt _ _ => Some (ShapeAdtType t)
+      | TFnDef _ _ => Some ShapeUnit
       | _ => None
       end
   end.
@@ -281,6 +282,7 @@ Fixpoint shape_matches_ty_fuel (fuel : nat) (shape : value_shape)
         end in
       match shape, t with
       | ShapeUnit, TTuple [] => true
+      | ShapeUnit, TFnDef _ _ => true
       | ShapeNever, TNever => true
       | ShapeBool, TBool => true
       | ShapeChar, TChar => true
@@ -2739,9 +2741,10 @@ Definition allocation_wf
   valid_bytes (allocation_bytes allocation) &&
   is_power_of_two align &&
   negb (shape_is_unsized (allocation_shape allocation)) &&
-  shape_layout_supported layouts (allocation_shape allocation) &&
-  Nat.eqb (shape_size_with_layouts layouts (allocation_shape allocation)) size &&
-  Nat.leb (shape_align_with_layouts layouts (allocation_shape allocation)) align &&
+  (negb (allocation_live allocation) ||
+    (shape_layout_supported layouts (allocation_shape allocation) &&
+     Nat.eqb (shape_size_with_layouts layouts (allocation_shape allocation)) size &&
+     Nat.leb (shape_align_with_layouts layouts (allocation_shape allocation)) align)) &&
   initialized_provenance_wf allocation_count
     (allocation_init allocation) (allocation_provenance allocation) &&
   (allocation_live allocation ||
