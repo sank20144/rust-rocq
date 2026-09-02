@@ -96,3 +96,11 @@ compiler runs with different configurations do not overwrite each other.
 Translates every input under `tests/inputs` and compiles each result against
 `theories/Syntax.v`. It also translates the Cargo projects under `tests/cargo`.
 It reports how many constructs could not be translated, which should be zero.
+
+    ./check.sh --include-deps
+
+Also translates the dependency crates of the Oak fixture, such as `bitvec` and
+`x86_64`, and lists each generated file with its number of bodies, its number of
+lines and its number of unrepresented constructs. Each crate is written to its
+own directory under `out/cargo-oak-bitmap`, with the `.mir` it was translated
+from. The dependency files are not compiled with Rocq.

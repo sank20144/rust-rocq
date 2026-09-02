@@ -3,6 +3,11 @@ set -e
 
 cd "$(dirname "$0")"
 root=$(pwd)
+include_deps=
+if [ "${1:-}" = --include-deps ]; then
+    include_deps=--include-deps
+    shift
+fi
 out=${1:-out}
 case "$out" in
     /*) out_root=$out ;;
@@ -81,12 +86,13 @@ check_cargo_fixture() {
     manifest=$2
     crate=$3
     expected_dir=${4:-}
+    deps=${5:-}
     fixture_out="$out_root/cargo-$label"
     cargo_target="$out_root/cargo-target/$label"
 
     printf '%-12s ' "$label"
     if ! PATH="$root/target/debug:$PATH" cargo rocq \
-        --rocq-out "$fixture_out" -- \
+        --rocq-out "$fixture_out" $deps -- \
         --manifest-path "$manifest" --target-dir "$cargo_target" \
         >/dev/null 2>"$out.err"; then
         echo "FAIL (cargo translation)"
@@ -97,7 +103,7 @@ check_cargo_fixture() {
 
     generated=$(find "$fixture_out" -name "$crate.v" -type f | head -1)
     generated_count=$(find "$fixture_out" -name '*.v' -type f | wc -l)
-    if [ -z "$generated" ] || [ "$generated_count" -ne 1 ]; then
+    if [ -z "$generated" ] || { [ -z "$deps" ] && [ "$generated_count" -ne 1 ]; }; then
         echo "FAIL (expected one primary-crate output, found $generated_count)"
         fail=1
         return
@@ -171,6 +177,14 @@ check_cargo_fixture() {
     construct_count=$(wc -l <"$constructs")
     body_count=$(wc -l <"$bodies")
     echo "ok  $body_count bodies, $construct_count rocq constructors, $holes unrepresented$annotation_report"
+
+    if [ -n "$deps" ]; then
+        find "$fixture_out" -name '*.v' -type f ! -name "$crate.v" | sort | while read -r dep; do
+            printf '             %6s bodies, %8s lines, %2s unrepresented  %s\n' \
+                "$(wc -l <"${dep%.v}.bodies")" "$(wc -l <"$dep")" \
+                "$(grep -c 'TError "\|CError "' "$dep" || true)" "${dep#"$root"/}"
+        done
+    fi
 }
 
 check_cargo_fixture \
@@ -200,7 +214,8 @@ else
         oak-bitmap \
         "$oak_dir/Cargo.toml" \
         oak_bitmap_allocator \
-        "$oak_dir"
+        "$oak_dir" \
+        "$include_deps"
 fi
 
 rm -f "$out.err"
