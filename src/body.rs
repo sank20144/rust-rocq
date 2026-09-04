@@ -401,7 +401,7 @@ impl<'tcx> Cx<'tcx> {
                     rocq::list(
                         targets
                             .iter()
-                            .map(|(v, t)| rocq::pair(rocq::int(v as i128), bb(t)))
+                            .map(|(v, t)| rocq::pair(rocq::bits(v), bb(t)))
                             .collect(),
                     ),
                     bb(targets.otherwise()),

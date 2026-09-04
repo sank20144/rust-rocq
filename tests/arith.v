@@ -69,3 +69,46 @@ Example the_frame_is_freed_at_return :
   | _ => false
   end = true.
 Proof. vm_compute. reflexivity. Qed.
+
+Example a_signed_comparison_puts_minus_one_below_zero :
+  Means is_below [pat32 (-1); pat32 0] (ARet (VBool true)).
+Proof. apply (means_within 20%nat). vm_compute. reflexivity. Qed.
+
+Example a_signed_comparison_on_i8 :
+  Means is_at_most [VBits W8 200; VBits W8 5] (ARet (VBool true)).
+Proof. apply (means_within 20%nat). vm_compute. reflexivity. Qed.
+
+Example a_switch_on_the_largest_u128 :
+  Means is_max [VBits W128 (2 ^ 128 - 1)] (ARet (VBool true)).
+Proof. apply (means_within 20%nat). vm_compute. reflexivity. Qed.
+
+Example signed_division_rounds_towards_zero :
+  Means quotient [pat32 (-7); pat32 2] (ARet (pat32 (-3))).
+Proof. apply (means_within 20%nat). vm_compute. reflexivity. Qed.
+
+Example dividing_the_minimum_by_minus_one_panics :
+  Means quotient [pat32 (-2147483648); pat32 (-1)] APanic.
+Proof. apply (means_within 20%nat). vm_compute. reflexivity. Qed.
+
+Example dividing_by_zero_panics :
+  Means quotient [pat32 7; pat32 0] APanic.
+Proof. apply (means_within 20%nat). vm_compute. reflexivity. Qed.
+
+Example the_division_operator_is_undefined_on_the_minimum_over_minus_one :
+  denote_binop (TInt W32) (TInt W32) BDiv (pat32 (-2147483648)) (pat32 (-1)) (ByteState [] [])
+    = Ub UbDivisionOverflow.
+Proof. vm_compute. reflexivity. Qed.
+
+Example the_remainder_operator_is_undefined_on_zero :
+  denote_binop (TInt W32) (TInt W32) BRem (pat32 7) (pat32 0) (ByteState [] [])
+    = Ub UbDivisionByZero.
+Proof. vm_compute. reflexivity. Qed.
+
+Example a_write_to_a_dead_local_is_undefined :
+  write [] (Place 1%nat []) (VBits W32 7) (ByteState [LocalUnallocated; LocalDead] [])
+    = Ub UbReadDead.
+Proof. vm_compute. reflexivity. Qed.
+
+Example the_runtime_check_operand_cannot_appear_at_this_phase :
+  denote_operand [] (ORuntimeCheck RcUbChecks) (ByteState [] []) = Unmodelled "ORuntimeCheck".
+Proof. vm_compute. reflexivity. Qed.

@@ -40,3 +40,28 @@ pub fn incr(m: Maybe) -> Maybe {
         Maybe::Just(v) => Maybe::Just(v + 1),
     }
 }
+
+pub enum Code {
+    A = 1,
+    B = 0,
+}
+
+pub fn code_value(c: Code) -> u32 {
+    match c {
+        Code::A => 100,
+        Code::B => 200,
+    }
+}
+
+#[repr(i8)]
+pub enum Level {
+    Low = -1,
+    High = 1,
+}
+
+pub fn level_value(l: Level) -> i32 {
+    match l {
+        Level::Low => 10,
+        Level::High => 20,
+    }
+}

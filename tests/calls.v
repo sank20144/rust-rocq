@@ -226,7 +226,7 @@ Proof. apply (means_under_within (with_models abort_as_ub) 100). vm_compute. ref
 
 Example calling_a_function_that_loops_forever_diverges :
   Diverges (run_with P call_spin [] []).
-Proof. apply (run_with_diverges P 2 1). vm_compute. reflexivity. Qed.
+Proof. apply (run_with_calls_cycling P call_spin [] [] 1 1). vm_compute. reflexivity. Qed.
 
 Definition renamed (n : name) (b : body) : body :=
   Body n (bd_file b) (bd_span b) (bd_generics b) (bd_bounds b) (bd_arg_count b)

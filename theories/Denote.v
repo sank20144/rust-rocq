@@ -5,11 +5,14 @@ Import ListNotations.
 Local Open Scope string_scope.
 Local Open Scope nat_scope.
 
-CoInductive delay (A : Type) : Type :=
-  | Now (a : A)
-  | Later (d : delay A).
-Arguments Now {A} _.
-Arguments Later {A} _.
+Definition bounded (A : Type) : Type := nat -> option A.
+
+Definition Terminates {A} (d : bounded A) (a : A) : Prop := exists n, d n = Some a.
+
+Definition Diverges {A} (d : bounded A) : Prop := forall n, d n = None.
+
+Definition Monotone {A} (d : bounded A) : Prop :=
+  forall n m a, n <= m -> d n = Some a -> d m = Some a.
 
 Inductive outcome (A : Type) :=
   | Ok (a : A) (st : prog_state)
@@ -56,22 +59,9 @@ Definition of_access {A} (what : string) (r : access_result A) : M A :=
 Definition of_option {A} (what : string) (o : option A) : M A :=
   fun st => match o with Some a => Ok a st | None => Unmodelled what end.
 
-CoFixpoint drive {L R} (step : L -> M (L + R)) (l : L) (st : prog_state)
-    : delay (outcome R) :=
-  match step l st with
-  | Ok (inl l') st' => Later (drive step l' st')
-  | Ok (inr r) st' => Now (Ok r st')
-  | Ub p => Now (Ub p)
-  | Unmodelled w => Now (Unmodelled w)
-  | Mismatch w => Now (Mismatch w)
-  end.
+Section Semantics.
 
-Inductive Terminates {A} : delay A -> A -> Prop :=
-  | TNow : forall a, Terminates (Now a) a
-  | TLater : forall d a, Terminates d a -> Terminates (Later d) a.
-
-CoInductive Diverges {A} : delay A -> Prop :=
-  | DLater : forall d, Diverges d -> Diverges (Later d).
+Context `{Addr : AddrAlg}.
 
 Definition layouts_of_body `{Alg : LayoutAlg} (adts : list adt_def) (b : body)
     : layout_env :=
@@ -81,9 +71,10 @@ Definition read (env : layout_env) (p : place) : M runtime_value :=
   fun st => of_access "read place" (read_place_result_with_layouts env p st) st.
 
 Definition write (env : layout_env) (p : place) (v : runtime_value) : M unit :=
-  fun st => match write_place_with_layouts env p v st with
-            | Some st' => Ok tt st'
-            | None => Unmodelled "write place"
+  fun st => match write_place_result_with_layouts env p v st with
+            | AccessOk st' => Ok tt st'
+            | AccessUb r => Ub r
+            | AccessFail => Unmodelled "write place"
             end.
 
 Definition bits_of (t : ty) : option (int_width * bool) :=
@@ -114,21 +105,67 @@ Definition overflows (w : int_width) (signed : bool) (z : Z) : bool :=
        orb (Z.ltb z (Z.opp h)) (Z.leb h z)
   else orb (Z.ltb z 0) (Z.leb (Z.pow 2%Z (width_bits w)) z).
 
+Definition local_ty (b : body) (n : nat) : ty :=
+  match nth_error (bd_locals b) n with
+  | Some d => ld_ty d
+  | None => TError "no such local"
+  end.
+
+Definition proj_ty (t : ty) (pe : proj_elem) : ty :=
+  match pe with
+  | PDeref =>
+      match t with
+      | TRef _ u _ | TRawPtr u _ => u
+      | TAdt _ (GTy u :: _) => u
+      | _ => TError "deref of a non-pointer type"
+      end
+  | PField _ u => u
+  | PIndex _ | PConstantIndex _ _ _ =>
+      match t with
+      | TArray u _ | TSlice u => u
+      | _ => TError "index into a non-array type"
+      end
+  | PSubslice _ _ _ => t
+  | PDowncast _ _ => t
+  | POpaqueCast u => u
+  | PUnwrapUnsafeBinder u => u
+  end.
+
+Definition place_ty (b : body) (p : place) : ty :=
+  fold_left proj_ty (pl_proj p) (local_ty b (pl_local p)).
+
+Definition operand_ty (b : body) (o : operand) : ty :=
+  match o with
+  | OCopy p | OMove p => place_ty b p
+  | OConst c =>
+      match co_const c with
+      | KTy t _ | KUnevaluated _ _ _ t | KVal _ t => t
+      end
+  | ORuntimeCheck _ => TBool
+  end.
+
 Definition const_value (t : ty) (v : const_value) : M runtime_value :=
-  match v, t with
-  | CvScalar (ScInt z _), TBool => ret (VBool (negb (Z.eqb z 0%Z)))
-  | CvScalar (ScInt z _), TChar => ret (VChar z)
-  | CvScalar (ScInt z _), TInt w => ret (VBits w (wrap w true z))
-  | CvScalar (ScInt z _), TUint w => ret (VBits w (wrap w false z))
-  | CvZeroSized, _ => ret VUnit
-  | _, _ => fail "constant outside the fragment"
+  match v with
+  | CvScalar (ScInt z _) =>
+      match t with
+      | TBool => ret (VBool (negb (Z.eqb z 0%Z)))
+      | TChar => ret (VChar z)
+      | TInt w => ret (VBits w (wrap w true z))
+      | TUint w => ret (VBits w (wrap w false z))
+      | _ => fail "scalar constant of a type outside the fragment"
+      end
+  | CvScalar (ScPtr _ _ _) => fail "pointer constant"
+  | CvZeroSized => ret VUnit
+  | CvSlice _ _ => fail "slice constant"
+  | CvIndirect _ _ => fail "indirect constant"
   end.
 
 Definition denote_const (c : const_op) : M runtime_value :=
   match co_const c with
   | KVal v t => const_value t v
   | KTy t (CValue _ z) => const_value t (CvScalar (ScInt z 0))
-  | _ => fail "unevaluated constant"
+  | KTy _ _ => fail "type-level constant that is not a value"
+  | KUnevaluated _ _ _ _ => fail "unevaluated constant"
   end.
 
 Definition denote_operand (env : layout_env) (o : operand) : M runtime_value :=
@@ -141,13 +178,26 @@ Definition denote_operand (env : layout_env) (o : operand) : M runtime_value :=
                 | None => Unmodelled "deinitialise at move"
                 end
   | OConst c => denote_const c
-  | ORuntimeCheck _ => ret (VBool true)
+  | ORuntimeCheck _ => fail "ORuntimeCheck"
   end.
 
 Definition field_ty (t : ty) (i : nat) : ty :=
   match t with TTuple ts => nth i ts (TError "no such field") | _ => t end.
 
-Definition denote_binop (dst : ty) (op : bin_op) (a b : runtime_value)
+Definition bin_op_name (op : bin_op) : string :=
+  match op with
+  | BAdd => "BAdd" | BAddUnchecked => "BAddUnchecked" | BAddWithOverflow => "BAddWithOverflow"
+  | BSub => "BSub" | BSubUnchecked => "BSubUnchecked" | BSubWithOverflow => "BSubWithOverflow"
+  | BMul => "BMul" | BMulUnchecked => "BMulUnchecked" | BMulWithOverflow => "BMulWithOverflow"
+  | BDiv => "BDiv" | BRem => "BRem"
+  | BBitXor => "BBitXor" | BBitAnd => "BBitAnd" | BBitOr => "BBitOr"
+  | BShl => "BShl" | BShlUnchecked => "BShlUnchecked"
+  | BShr => "BShr" | BShrUnchecked => "BShrUnchecked"
+  | BEq => "BEq" | BLt => "BLt" | BLe => "BLe" | BNe => "BNe" | BGe => "BGe" | BGt => "BGt"
+  | BCmp => "BCmp" | BOffset => "BOffset"
+  end.
+
+Definition denote_binop (dst arg : ty) (op : bin_op) (a b : runtime_value)
     : M runtime_value :=
   match a, b with
   | VBits _ x, VBits _ y =>
@@ -164,6 +214,22 @@ Definition denote_binop (dst : ty) (op : bin_op) (a b : runtime_value)
             ret (VTuple [VBits w (wrap w sg r); VBool (overflows w sg r)])
         | None => fail "checked arithmetic into an unexpected destination"
         end in
+      let divide k :=
+        match bits_of dst with
+        | Some (w, sg) =>
+            let x' := interp w sg x in
+            let y' := interp w sg y in
+            if Z.eqb y' 0 then raise UbDivisionByZero
+            else if sg && Z.eqb y' (-1) && Z.eqb x' (- 2 ^ (width_bits w - 1))
+            then raise UbDivisionOverflow
+            else ret (VBits w (wrap w sg (k x' y')))
+        | None => fail "division into a non-integer destination"
+        end in
+      let compare k :=
+        match bits_of arg with
+        | Some (w, sg) => ret (VBool (k (interp w sg x) (interp w sg y)))
+        | None => fail "comparison of operands that are not integers"
+        end in
       match op with
       | BAdd => arith Z.add
       | BSub => arith Z.sub
@@ -171,18 +237,20 @@ Definition denote_binop (dst : ty) (op : bin_op) (a b : runtime_value)
       | BAddWithOverflow => checked Z.add
       | BSubWithOverflow => checked Z.sub
       | BMulWithOverflow => checked Z.mul
-      | BDiv => if Z.eqb y 0%Z then raise UbInvalidScalar else arith Z.quot
-      | BRem => if Z.eqb y 0%Z then raise UbInvalidScalar else arith Z.rem
+      | BDiv => divide Z.quot
+      | BRem => divide Z.rem
       | BBitAnd => arith Z.land
       | BBitOr => arith Z.lor
       | BBitXor => arith Z.lxor
       | BEq => ret (VBool (Z.eqb x y))
       | BNe => ret (VBool (negb (Z.eqb x y)))
-      | BLt => ret (VBool (Z.ltb x y))
-      | BLe => ret (VBool (Z.leb x y))
-      | BGt => ret (VBool (Z.ltb y x))
-      | BGe => ret (VBool (Z.leb y x))
-      | _ => fail "binary operator outside the fragment"
+      | BLt => compare Z.ltb
+      | BLe => compare Z.leb
+      | BGt => compare (fun p q => Z.ltb q p)
+      | BGe => compare (fun p q => Z.leb q p)
+      | BAddUnchecked | BSubUnchecked | BMulUnchecked
+      | BShl | BShlUnchecked | BShr | BShrUnchecked
+      | BCmp | BOffset => fail (bin_op_name op)
       end
   | VBool p, VBool q =>
       match op with
@@ -191,26 +259,42 @@ Definition denote_binop (dst : ty) (op : bin_op) (a b : runtime_value)
       | BBitAnd => ret (VBool (andb p q))
       | BBitOr => ret (VBool (orb p q))
       | BBitXor => ret (VBool (xorb p q))
-      | _ => fail "boolean operator outside the fragment"
+      | BLt => ret (VBool (andb (negb p) q))
+      | BLe => ret (VBool (orb (negb p) q))
+      | BGt => ret (VBool (andb p (negb q)))
+      | BGe => ret (VBool (orb p (negb q)))
+      | BAdd | BAddUnchecked | BAddWithOverflow
+      | BSub | BSubUnchecked | BSubWithOverflow
+      | BMul | BMulUnchecked | BMulWithOverflow
+      | BDiv | BRem | BShl | BShlUnchecked | BShr | BShrUnchecked
+      | BCmp | BOffset => fail (String.append "boolean " (bin_op_name op))
       end
   | _, _ => fail "operands outside the fragment"
   end.
 
 Definition denote_unop (dst : ty) (op : un_op) (v : runtime_value)
     : M runtime_value :=
-  match op, v with
-  | UNot, VBool b => ret (VBool (negb b))
-  | UNeg, VBits _ z =>
-      match bits_of dst with
-      | Some (w, s) => ret (VBits w (wrap w s (Z.opp z)))
-      | None => fail "negation into a non-integer destination"
+  match op with
+  | UNot =>
+      match v with
+      | VBool b => ret (VBool (negb b))
+      | VBits _ z =>
+          match bits_of dst with
+          | Some (w, s) => ret (VBits w (wrap w s (Z.lnot z)))
+          | None => fail "complement into a non-integer destination"
+          end
+      | _ => fail "complement of a value outside the fragment"
       end
-  | UNot, VBits _ z =>
-      match bits_of dst with
-      | Some (w, s) => ret (VBits w (wrap w s (Z.lnot z)))
-      | None => fail "complement into a non-integer destination"
+  | UNeg =>
+      match v with
+      | VBits _ z =>
+          match bits_of dst with
+          | Some (w, s) => ret (VBits w (wrap w s (Z.opp z)))
+          | None => fail "negation into a non-integer destination"
+          end
+      | _ => fail "negation of a value outside the fragment"
       end
-  | _, _ => fail "unary operator outside the fragment"
+  | UPtrMetadata => fail "UPtrMetadata"
   end.
 
 Fixpoint denote_operands (env : layout_env) (os : list operand)
@@ -223,13 +307,24 @@ Fixpoint denote_operands (env : layout_env) (os : list operand)
       ret (v :: vs)
   end.
 
-Definition denote_rvalue (env : layout_env) (dst : ty) (r : rvalue) : M runtime_value :=
+Definition discriminant_of (adts : list adt_def) (path : name) (k : variant) : option Z :=
+  match find (fun a => String.eqb (ad_path a) path) adts with
+  | Some a =>
+      match find (fun v => Nat.eqb (vd_index v) k) (ad_variants a) with
+      | Some v => Some (vd_discr v)
+      | None => None
+      end
+  | None => None
+  end.
+
+Definition denote_rvalue (adts : list adt_def) (env : layout_env) (b : body) (dst : ty)
+    (r : rvalue) : M runtime_value :=
   match r with
   | RUse o _ => denote_operand env o
-  | RBinaryOp op a b =>
-      x <- denote_operand env a ;;
-      y <- denote_operand env b ;;
-      denote_binop dst op x y
+  | RBinaryOp op x y =>
+      vx <- denote_operand env x ;;
+      vy <- denote_operand env y ;;
+      denote_binop dst (operand_ty b x) op vx vy
   | RUnaryOp op o => v <- denote_operand env o ;; denote_unop dst op v
   | RRef _ _ p | RRawPtr _ p =>
       fun st => match address_of_place_with_layouts env p st with
@@ -244,20 +339,26 @@ Definition denote_rvalue (env : layout_env) (dst : ty) (r : rvalue) : M runtime_
   | RDiscriminant p =>
       v <- read env p ;;
       match v with
-      | VAdt _ k _ =>
+      | VAdt path k _ =>
+          d <- of_option "discriminant of an ADT with no definition"
+                 (discriminant_of adts path k) ;;
           match bits_of dst with
-          | Some (w, _) => ret (VBits w (Z.of_nat k))
+          | Some (w, sg) => ret (VBits w (wrap w sg d))
           | None => fail "discriminant into a non-integer destination"
           end
       | _ => fail "discriminant of a non-enum value"
       end
-  | _ => fail "rvalue outside the fragment"
-  end.
-
-Definition local_ty (b : body) (n : nat) : ty :=
-  match nth_error (bd_locals b) n with
-  | Some d => ld_ty d
-  | None => TError "no such local"
+  | RAggregate (AgArray _) _ => fail "AgArray"
+  | RAggregate (AgClosure _ _) _ => fail "AgClosure"
+  | RAggregate (AgCoroutine _ _) _ => fail "AgCoroutine"
+  | RAggregate (AgCoroutineClosure _ _) _ => fail "AgCoroutineClosure"
+  | RAggregate (AgRawPtr _ _) _ => fail "AgRawPtr"
+  | RRepeat _ _ => fail "RRepeat"
+  | RThreadLocalRef _ => fail "RThreadLocalRef"
+  | RCast _ _ _ => fail "RCast"
+  | RCopyForDeref _ => fail "RCopyForDeref"
+  | RWrapUnsafeBinder _ _ => fail "RWrapUnsafeBinder"
+  | RReborrow _ _ _ => fail "RReborrow"
   end.
 
 Fixpoint has_storage_live (l : local) (ss : list statement) : bool :=
@@ -301,10 +402,11 @@ Definition free_frame (env : layout_env) (b : body) : M unit :=
     | None => Unmodelled "free the frame at return"
     end.
 
-Definition denote_statement (env : layout_env) (b : body) (s : statement) : M unit :=
+Definition denote_statement (adts : list adt_def) (env : layout_env) (b : body)
+    (s : statement) : M unit :=
   match st_kind s with
   | SAssign p r =>
-      v <- denote_rvalue env (local_ty b (pl_local p)) r ;;
+      v <- denote_rvalue adts env b (place_ty b p) r ;;
       write env p v
   | SStorageLive l =>
       sh <- of_option "shape of local" (shape_of_layout_ty (local_ty b l)) ;;
@@ -326,13 +428,14 @@ Definition denote_statement (env : layout_env) (b : body) (s : statement) : M un
   | SFakeRead _ _ | SAscribeUserType _ _ _ | SPlaceMention _
   | SNop | SConstEvalCounter | SCoverage _
   | SBackwardIncompatibleDropHint _ _ => ret tt
-  | _ => fail "statement outside the fragment"
+  | SIntrinsic _ => fail "SIntrinsic"
   end.
 
-Fixpoint denote_statements (env : layout_env) (b : body) (ss : list statement) : M unit :=
+Fixpoint denote_statements (adts : list adt_def) (env : layout_env) (b : body)
+    (ss : list statement) : M unit :=
   match ss with
   | [] => ret tt
-  | s :: rest => denote_statement env b s ;;; denote_statements env b rest
+  | s :: rest => denote_statement adts env b s ;;; denote_statements adts env b rest
   end.
 
 Inductive result :=
@@ -628,22 +731,26 @@ Definition denote_terminator `{Alg : LayoutAlg} (P : program) (env : layout_env)
       end
   | TDrop p target _ _ _ =>
       fun st =>
-        match read_place_result_with_layouts env p st with
-        | AccessOk _ =>
+        match place_initialized_result env p st with
+        | AccessOk true =>
             match deinitialize_place_with_layouts env p st with
             | Some st' => Ok (Goto target) st'
             | None => Unmodelled "deinitialise at drop"
             end
-        | AccessUb UbReadUninitialized => Ok (Goto target) st
+        | AccessOk false | AccessUb UbReadUninitialized => Ok (Goto target) st
         | AccessUb r => Ub r
-        | AccessFail => Unmodelled "read place at drop"
+        | AccessFail => Unmodelled "place at drop"
         end
   | TCall func args dest target _ _ _ => denote_call P env b func args dest target
   | TFalseEdge real _ => ret (Goto real)
   | TFalseUnwind real _ => ret (Goto real)
   | TUnreachable => raise UbReachedUnreachable
   | TUnwindResume => ret (Finish Unwound)
-  | _ => fail "terminator outside the fragment"
+  | TUnwindTerminate _ => fail "TUnwindTerminate"
+  | TTailCall _ _ _ => fail "TTailCall"
+  | TYield _ _ _ _ => fail "TYield"
+  | TCoroutineDrop => fail "TCoroutineDrop"
+  | TInlineAsm _ _ _ _ _ _ => fail "TInlineAsm"
   end.
 
 Definition find_block (b : body) (n : block_id) : option basic_block :=
@@ -654,290 +761,291 @@ Definition denote_block `{Alg : LayoutAlg} (P : program) (env : layout_env) (b :
   match find_block b n with
   | None => fail "no such block"
   | Some blk =>
-      denote_statements env b (bb_stmts blk) ;;;
+      denote_statements (pg_adts P) env b (bb_stmts blk) ;;;
       denote_terminator P env b (bb_term blk)
   end.
 
-Record frame := Frame {
-  fr_body : body;
-  fr_env : layout_env;
-  fr_locals : list local_storage;
-  fr_dest : place;
-  fr_target : option block_id;
-}.
-
-Record config := Config {
-  cf_body : body;
-  cf_env : layout_env;
-  cf_block : block_id;
-  cf_stack : list frame;
-}.
-
-Definition restore (locals : list local_storage) : M unit :=
-  fun st => Ok tt (state_with_locals st locals).
-
-Fixpoint finish (stack : list frame) (r : result) : M (config + result) :=
-  match stack with
-  | [] => ret (inr r)
-  | fr :: rest =>
-      restore (fr_locals fr) ;;;
-      match r with
-      | Returned v =>
-          t <- return_to (fr_env fr) (fr_dest fr) (fr_target fr) v ;;
-          ret (inl (Config (fr_body fr) (fr_env fr) t rest))
-      | Panicked | Unwound => finish rest r
+Fixpoint run_block `{Alg : LayoutAlg} (P : program) (n : nat) (env : layout_env) (b : body)
+    (l : block_id) (st : prog_state) : option (outcome result) :=
+  match n with
+  | O => None
+  | S n' =>
+      match denote_block P env b l st with
+      | Ok (Goto l') st' => run_block P n' env b l' st'
+      | Ok (Finish r) st' => Some (Ok r st')
+      | Ok (Enter callee env' saved dest target) st' =>
+          match run_block P n' env' callee 0 st' with
+          | Some (Ok (Returned v) st'') =>
+              match return_to env dest target v (state_with_locals st'' saved) with
+              | Ok t st3 => run_block P n' env b t st3
+              | Ub r => Some (Ub r)
+              | Unmodelled w => Some (Unmodelled w)
+              | Mismatch w => Some (Mismatch w)
+              end
+          | Some (Ok r st'') => Some (Ok r (state_with_locals st'' saved))
+          | Some (Ub r) => Some (Ub r)
+          | Some (Unmodelled w) => Some (Unmodelled w)
+          | Some (Mismatch w) => Some (Mismatch w)
+          | None => None
+          end
+      | Ub r => Some (Ub r)
+      | Unmodelled w => Some (Unmodelled w)
+      | Mismatch w => Some (Mismatch w)
       end
   end.
 
-Definition step `{Alg : LayoutAlg} (P : program) (c : config) : M (config + result) :=
-  k <- denote_block P (cf_env c) (cf_body c) (cf_block c) ;;
-  match k with
-  | Goto n => ret (inl (Config (cf_body c) (cf_env c) n (cf_stack c)))
-  | Enter callee env saved dest target =>
-      ret (inl (Config callee env 0
-                  (Frame (cf_body c) (cf_env c) saved dest target :: cf_stack c)))
-  | Finish r => finish (cf_stack c) r
-  end.
+Lemma run_block_call `{Alg : LayoutAlg} (P : program) n env b l st callee env' saved dest
+    target st' :
+  denote_block P env b l st = Ok (Enter callee env' saved dest target) st' ->
+  run_block P (S n) env b l st =
+    match run_block P n env' callee 0 st' with
+    | Some (Ok (Returned v) st'') =>
+        match return_to env dest target v (state_with_locals st'' saved) with
+        | Ok t st3 => run_block P n env b t st3
+        | Ub r => Some (Ub r)
+        | Unmodelled w => Some (Unmodelled w)
+        | Mismatch w => Some (Mismatch w)
+        end
+    | Some (Ok r st'') => Some (Ok r (state_with_locals st'' saved))
+    | Some (Ub r) => Some (Ub r)
+    | Some (Unmodelled w) => Some (Unmodelled w)
+    | Some (Mismatch w) => Some (Mismatch w)
+    | None => None
+    end.
+Proof. intros H. cbn [run_block]. rewrite H. reflexivity. Qed.
 
-Definition exec `{Alg : LayoutAlg} (P : program) (c : config) (st : prog_state)
-    : delay (outcome result) :=
-  drive (step P) c st.
-
-Definition start `{Alg : LayoutAlg} (P : program) (b : body) : config :=
-  Config b (layouts_of_body (pg_adts P) b) 0 [].
+Lemma run_block_monotone `{Alg : LayoutAlg} (P : program) :
+  forall n m env b l st o,
+    n <= m -> run_block P n env b l st = Some o -> run_block P m env b l st = Some o.
+Proof.
+  induction n as [|n IH]; intros m env b l st o Hle H; [discriminate|].
+  destruct m as [|m]; [lia|].
+  cbn [run_block] in *.
+  destruct (denote_block P env b l st) as [k st'| | |]; try exact H.
+  destruct k as [l'|r|callee env' saved dest target].
+  - apply IH; [lia | exact H].
+  - exact H.
+  - destruct (run_block P n env' callee 0 st') as [o1|] eqn:E1; [|discriminate].
+    rewrite (IH m env' callee 0 st' o1 ltac:(lia) E1).
+    destruct o1 as [[v| |] st''| | |]; try exact H.
+    destruct (return_to env dest target v (state_with_locals st'' saved)) as [t st3| | |];
+      try exact H.
+    apply IH; [lia | exact H].
+Qed.
 
 Definition run_with `{Alg : LayoutAlg} (P : program) (b : body) (memory : memory_state)
-    (args : list runtime_value) : delay (outcome result) :=
-  match check_args b args with
-  | Some why => Now (Mismatch why)
-  | None =>
-      match entry_state_from (cf_env (start P b)) b memory args with
-      | Some st => exec P (start P b) st
-      | None => Now (Unmodelled "allocate the frame at entry")
-      end
-  end.
+    (args : list runtime_value) : bounded (outcome result) :=
+  fun n =>
+    match check_args b args with
+    | Some why => Some (Mismatch why)
+    | None =>
+        let env := layouts_of_body (pg_adts P) b in
+        match entry_state_from env b memory args with
+        | Some st => run_block P n env b 0 st
+        | None => Some (Unmodelled "allocate the frame at entry")
+        end
+    end.
+
+Lemma run_with_monotone `{Alg : LayoutAlg} (P : program) b memory args :
+  Monotone (run_with P b memory args).
+Proof.
+  intros n m o Hle H. unfold run_with in *.
+  destruct (check_args b args); [exact H|].
+  destruct (entry_state_from _ b memory args); [|exact H].
+  exact (run_block_monotone P n m _ b 0 _ o Hle H).
+Qed.
 
 Definition run_from `{Alg : LayoutAlg} (adts : list adt_def) (b : body)
-    (memory : memory_state) (args : list runtime_value) : delay (outcome result) :=
+    (memory : memory_state) (args : list runtime_value) : bounded (outcome result) :=
   run_with (only_adts adts) b memory args.
 
 Definition run_in `{Alg : LayoutAlg} (adts : list adt_def) (b : body) (args : list runtime_value)
-    : delay (outcome result) :=
+    : bounded (outcome result) :=
   run_from adts b [] args.
 
-Definition run `{Alg : LayoutAlg} (b : body) (args : list runtime_value) : delay (outcome result) :=
+Definition run `{Alg : LayoutAlg} (b : body) (args : list runtime_value)
+    : bounded (outcome result) :=
   run_in [] b args.
 
 Definition run_at `{Alg : LayoutAlg} (b : body) (targs : list garg)
-    (args : list runtime_value) : delay (outcome result) :=
+    (args : list runtime_value) : bounded (outcome result) :=
   run (subst_body targs b) args.
 
-Fixpoint peek {A} (n : nat) (d : delay A) : option A :=
-  match n, d with
-  | _, Now a => Some a
-  | S k, Later d' => peek k d'
-  | 0, Later _ => None
-  end.
+Definition peek {A} (n : nat) (d : bounded A) : option A := d n.
 
-Lemma peek_terminates {A} : forall n (d : delay A) a,
+Lemma peek_terminates {A} : forall n (d : bounded A) a,
   peek n d = Some a -> Terminates d a.
+Proof. intros n d a H. exists n. exact H. Qed.
+
+Theorem terminates_deterministic {A} : forall (d : bounded A) a a',
+  Monotone d -> Terminates d a -> Terminates d a' -> a = a'.
 Proof.
-  induction n as [|n IH]; intros d a H; destruct d; cbn in H.
-  - injection H; intros; subst; constructor.
-  - discriminate.
-  - injection H; intros; subst; constructor.
-  - constructor. apply IH. exact H.
+  intros d a a' Hm [n Hn] [n' Hn'].
+  destruct (Nat.le_ge_cases n n') as [Hle|Hle].
+  - rewrite (Hm n n' a Hle Hn) in Hn'. congruence.
+  - rewrite (Hm n' n a' Hle Hn') in Hn. congruence.
 Qed.
 
-Theorem terminates_deterministic {A} : forall (d : delay A) a a',
-  Terminates d a -> Terminates d a' -> a = a'.
-Proof.
-  intros d a a' H. revert a'.
-  induction H as [x|d x _ IH]; intros a' H'; inversion H'; subst; auto.
-Qed.
+Theorem not_both {A} : forall (d : bounded A) a, Terminates d a -> ~ Diverges d.
+Proof. intros d a [n Hn] Hd. rewrite (Hd n) in Hn. discriminate. Qed.
 
-Theorem not_both {A} : forall (d : delay A) a, Terminates d a -> ~ Diverges d.
-Proof.
-  intros d a H. induction H as [x|d x _ IH]; intros C; inversion C; auto.
-Qed.
-
-Definition frob {A} (d : delay A) : delay A :=
-  match d with Now a => Now a | Later d' => Later d' end.
-
-Lemma frob_eq {A} (d : delay A) : d = frob d.
-Proof. destruct d; reflexivity. Qed.
-
-Definition after_step {L R} (step : L -> M (L + R)) (o : outcome (L + R))
-    : delay (outcome R) :=
-  match o with
-  | Ok (inl l) st => Later (drive step l st)
-  | Ok (inr r) st => Now (Ok r st)
-  | Ub p => Now (Ub p)
-  | Unmodelled w => Now (Unmodelled w)
-  | Mismatch w => Now (Mismatch w)
-  end.
-
-Lemma drive_eq {L R} (step : L -> M (L + R)) l st :
-  drive step l st = after_step step (step l st).
-Proof.
-  rewrite (frob_eq (drive step l st)). simpl.
-  destruct (step l st) as [[l'|r] st'| | |]; reflexivity.
-Qed.
-
-Definition with_stack (c : config) (rest : list frame) : config :=
-  Config (cf_body c) (cf_env c) (cf_block c) (cf_stack c ++ rest).
-
-Definition lift (rest : list frame) (o : outcome (config + result))
-    : outcome (config + result) :=
-  match o with
-  | Ok (inl c) st => Ok (inl (with_stack c rest)) st
-  | Ok (inr r) st => finish rest r st
-  | Ub p => Ub p
-  | Unmodelled w => Unmodelled w
-  | Mismatch w => Mismatch w
-  end.
-
-Definition resume `{Alg : LayoutAlg} (P : program) (rest : list frame) (o : outcome result)
-    : delay (outcome result) :=
-  match o with
-  | Ok r st => after_step (step P) (finish rest r st)
-  | Ub p => Now (Ub p)
-  | Unmodelled w => Now (Unmodelled w)
-  | Mismatch w => Now (Mismatch w)
-  end.
-
-Lemma finish_app : forall s rest r st,
-  finish (s ++ rest) r st = lift rest (finish s r st).
-Proof.
-  induction s as [|fr s IH]; intros rest r st; [reflexivity|].
-  cbn. unfold bind, restore.
-  destruct r as [v| |]; [|apply IH|apply IH].
-  unfold return_to. destruct (fr_target fr); [|reflexivity].
-  unfold bind, write.
-  destruct (write_place_with_layouts (fr_env fr) (fr_dest fr) v
-              (state_with_locals st (fr_locals fr))); reflexivity.
-Qed.
-
-Lemma step_app `{Alg : LayoutAlg} (P : program) : forall c rest st,
-  step P (with_stack c rest) st = lift rest (step P c st).
-Proof.
-  intros c rest st. unfold step, bind. cbn [cf_body cf_env cf_block cf_stack with_stack].
-  destruct (denote_block P (cf_env c) (cf_body c) (cf_block c) st)
-    as [k st'| | |]; try reflexivity.
-  destruct k; try reflexivity. apply finish_app.
-Qed.
-
-Theorem stack_decomposition `{Alg : LayoutAlg} (P : program) :
-  forall c rest st o,
-    Terminates (exec P (with_stack c rest) st) o <->
-    exists o1, Terminates (exec P c st) o1 /\ Terminates (resume P rest o1) o.
-Proof.
-  intros c rest st o. split.
-  - intros H. remember (exec P (with_stack c rest) st) as d eqn:Hd.
-    revert c st Hd. induction H as [a|d a H IH]; intros c st Hd;
-      unfold exec in Hd; rewrite drive_eq, step_app in Hd;
-      destruct (step P c st) as [[c'|r] st'| p | w | w] eqn:E; cbn in Hd;
-      try discriminate.
-    + exists (Ok r st'). split.
-      * unfold exec. rewrite drive_eq, E. constructor.
-      * cbn. rewrite <- Hd. constructor.
-    + exists (Ub p). injection Hd as ->. split; [|constructor].
-      unfold exec. rewrite drive_eq, E. constructor.
-    + exists (Unmodelled w). injection Hd as ->. split; [|constructor].
-      unfold exec. rewrite drive_eq, E. constructor.
-    + exists (Mismatch w). injection Hd as ->. split; [|constructor].
-      unfold exec. rewrite drive_eq, E. constructor.
-    + injection Hd as Hd. destruct (IH c' st' Hd) as [o1 [H1 H2]].
-      exists o1. split; [|exact H2].
-      unfold exec. rewrite drive_eq, E. constructor. exact H1.
-    + exists (Ok r st'). split.
-      * unfold exec. rewrite drive_eq, E. constructor.
-      * cbn. rewrite <- Hd. constructor. exact H.
-  - intros [o1 [H1 H2]]. revert H2. remember (exec P c st) as d eqn:Hd.
-    revert c st Hd. induction H1 as [a|d a H IH]; intros c st Hd H2;
-      unfold exec in Hd; rewrite drive_eq in Hd;
-      destruct (step P c st) as [[c'|r] st'| p | w | w] eqn:E; cbn in Hd;
-      try discriminate; unfold exec; rewrite drive_eq, step_app, E; cbn.
-    + injection Hd as ->. exact H2.
-    + injection Hd as ->. inversion H2; subst. constructor.
-    + injection Hd as ->. inversion H2; subst. constructor.
-    + injection Hd as ->. inversion H2; subst. constructor.
-    + injection Hd as Hd. constructor. exact (IH c' st' Hd H2).
-Qed.
-
-Corollary call_decomposition `{Alg : LayoutAlg} (P : program) :
-  forall callee env fr stack st o,
-    Terminates (exec P (Config callee env 0 (fr :: stack)) st) o <->
-    exists o1, Terminates (exec P (Config callee env 0 []) st) o1
-      /\ Terminates (resume P (fr :: stack) o1) o.
-Proof.
-  intros callee env fr stack st o.
-  exact (stack_decomposition P (Config callee env 0 []) (fr :: stack) st o).
-Qed.
-
-Fixpoint advance {L R} (step : L -> M (L + R)) (n : nat) (l : L) (st : prog_state)
-    : option (L * prog_state) :=
-  match n with
-  | 0 => Some (l, st)
-  | S k =>
-      match step l st with
-      | Ok (inl l') st' => advance step k l' st'
+Fixpoint advance `{Alg : LayoutAlg} (P : program) (env : layout_env) (b : body) (k : nat)
+    (l : block_id) (st : prog_state) : option (block_id * prog_state) :=
+  match k with
+  | O => Some (l, st)
+  | S k' =>
+      match denote_block P env b l st with
+      | Ok (Goto l') st' => advance P env b k' l' st'
       | _ => None
       end
   end.
 
-Lemma advance_add {L R} (step : L -> M (L + R)) : forall a b l st,
-  advance step (a + b) l st =
-  match advance step a l st with
-  | Some (l', st') => advance step b l' st'
+Lemma advance_add `{Alg : LayoutAlg} (P : program) env b : forall i j l st,
+  advance P env b (i + j) l st =
+  match advance P env b i l st with
+  | Some (l', st') => advance P env b j l' st'
   | None => None
   end.
 Proof.
-  induction a as [|a IH]; intros b l st; [reflexivity|].
-  cbn. destruct (step l st) as [[l'|r] st'| | |]; try reflexivity. apply IH.
+  induction i as [|i IH]; intros j l st; [reflexivity|].
+  cbn. destruct (denote_block P env b l st) as [[l'| |] st'| | |]; try reflexivity.
+  apply IH.
 Qed.
 
-Lemma diverges_invariant {L R} (step : L -> M (L + R)) (Inv : L -> prog_state -> Prop) :
-  (forall l st, Inv l st -> exists l' st', step l st = Ok (inl l') st' /\ Inv l' st') ->
-  forall l st, Inv l st -> Diverges (drive step l st).
+Lemma diverges_after `{Alg : LayoutAlg} (P : program) env b : forall j l st l' st',
+  advance P env b j l st = Some (l', st') ->
+  (forall n, run_block P n env b l' st' = None) ->
+  forall n, run_block P n env b l st = None.
 Proof.
-  intros Hstep. cofix CIH. intros l st Hinv.
+  induction j as [|j IH]; intros l st l' st' H Hd n; cbn in H.
+  - injection H as <- <-. apply Hd.
+  - destruct (denote_block P env b l st) as [[l1| |] st1| | |] eqn:E; try discriminate.
+    destruct n as [|n]; [reflexivity|].
+    cbn [run_block]. rewrite E. exact (IH l1 st1 l' st' H Hd n).
+Qed.
+
+Lemma diverges_by_invariant `{Alg : LayoutAlg} (P : program) env b
+    (Inv : block_id -> prog_state -> Prop) :
+  (forall l st, Inv l st ->
+     exists l' st', denote_block P env b l st = Ok (Goto l') st' /\ Inv l' st') ->
+  forall l st, Inv l st -> forall n, run_block P n env b l st = None.
+Proof.
+  intros Hstep l st Hinv n. revert l st Hinv.
+  induction n as [|n IH]; intros l st Hinv; [reflexivity|].
   destruct (Hstep l st Hinv) as [l' [st' [E Hinv']]].
-  rewrite (drive_eq step l st), E. constructor. exact (CIH l' st' Hinv').
+  cbn [run_block]. rewrite E. exact (IH l' st' Hinv').
 Qed.
 
-Lemma diverges_after {L R} (step : L -> M (L + R)) : forall n l st l' st',
-  advance step n l st = Some (l', st') ->
-  Diverges (drive step l' st') -> Diverges (drive step l st).
-Proof.
-  induction n as [|n IH]; intros l st l' st' H Hd; cbn in H.
-  - injection H as <- <-. exact Hd.
-  - destruct (step l st) as [[l1|r] st1| | |] eqn:E; try discriminate.
-    rewrite drive_eq, E. constructor. exact (IH l1 st1 l' st' H Hd).
-Qed.
-
-Lemma diverges_by_cycle {L R} (step : L -> M (L + R)) (n k : nat) l st :
-  match advance step n l st with
-  | Some (l', st') => advance step (S k) l' st' = Some (l', st')
+Lemma diverges_by_cycle `{Alg : LayoutAlg} (P : program) env b (j k : nat) l st :
+  match advance P env b j l st with
+  | Some (l0, st0) => advance P env b (S k) l0 st0 = Some (l0, st0)
   | None => False
-  end -> Diverges (drive step l st).
+  end ->
+  forall n, run_block P n env b l st = None.
 Proof.
-  destruct (advance step n l st) as [[l0 st0]|] eqn:Hn; [|contradiction].
-  intros Hcycle. apply (diverges_after step n l st l0 st0 Hn).
-  apply (diverges_invariant step
-           (fun l' st' => exists j, j <= k /\ advance step j l0 st0 = Some (l', st'))).
-  - intros l' st' [j [Hj Hadv]].
-    assert (Hsplit : S k = j + S (k - j)) by lia.
+  destruct (advance P env b j l st) as [[l0 st0]|] eqn:Hj; [|contradiction].
+  intros Hcycle. apply (diverges_after P env b j l st l0 st0 Hj).
+  assert (Hinv : forall n i l' st', i <= k -> advance P env b i l0 st0 = Some (l', st') ->
+            run_block P n env b l' st' = None).
+  { induction n as [|n IH]; intros i l' st' Hi Hadv; [reflexivity|].
+    assert (Hsplit : S k = i + S (k - i)) by lia.
     pose proof Hcycle as Hc. rewrite Hsplit, advance_add, Hadv in Hc. cbn in Hc.
-    destruct (step l' st') as [[l''|r] st''| | |] eqn:E; try discriminate.
-    exists l'', st''. split; [reflexivity|].
-    destruct (Nat.eq_dec j k) as [->|Hne].
-    + rewrite Nat.sub_diag in Hc. cbn in Hc. injection Hc as -> ->.
-      exists 0. split; [lia | reflexivity].
-    + exists (S j). split; [lia|].
-      replace (S j) with (j + 1) by apply Nat.add_1_r.
-      rewrite advance_add, Hadv. cbn. rewrite E. reflexivity.
-  - exists 0. split; [lia | reflexivity].
+    destruct (denote_block P env b l' st') as [[l''| |] st''| | |] eqn:E; try discriminate.
+    cbn [run_block]. rewrite E.
+    destruct (Nat.eq_dec i k) as [->|Hne].
+    - rewrite Nat.sub_diag in Hc. cbn in Hc. injection Hc as -> ->.
+      apply (IH 0); [lia | reflexivity].
+    - apply (IH (S i)); [lia|].
+      replace (S i) with (i + 1) by apply Nat.add_1_r.
+      rewrite advance_add, Hadv. cbn. rewrite E. reflexivity. }
+  intros n. apply (Hinv n 0); [lia | reflexivity].
+Qed.
+
+Lemma diverges_in_callee `{Alg : LayoutAlg} (P : program) env b l st :
+  match denote_block P env b l st with
+  | Ok (Enter callee env' _ _ _) st' => forall n, run_block P n env' callee 0 st' = None
+  | _ => False
+  end ->
+  forall n, run_block P n env b l st = None.
+Proof.
+  destruct (denote_block P env b l st) as [[| |callee env' saved dest target] st'| | |] eqn:E;
+    try contradiction.
+  intros Hd n. destruct n as [|n]; [reflexivity|].
+  rewrite (run_block_call P n env b l st callee env' saved dest target st' E), Hd.
+  reflexivity.
+Qed.
+
+Lemma diverges_in_cycling_callee `{Alg : LayoutAlg} (P : program) env b l st (j k : nat) :
+  match denote_block P env b l st with
+  | Ok (Enter callee env' _ _ _) st' =>
+      match advance P env' callee j 0 st' with
+      | Some (l0, st0) => advance P env' callee (S k) l0 st0 = Some (l0, st0)
+      | None => False
+      end
+  | _ => False
+  end ->
+  forall n, run_block P n env b l st = None.
+Proof.
+  intros H. apply diverges_in_callee.
+  destruct (denote_block P env b l st) as [[| |callee env' saved dest target] st'| | |];
+    try contradiction.
+  exact (diverges_by_cycle P env' callee j k 0 st' H).
+Qed.
+
+Lemma run_with_diverges `{Alg : LayoutAlg} (P : program) b memory args :
+  match check_args b args with
+  | Some _ => False
+  | None =>
+      match entry_state_from (layouts_of_body (pg_adts P) b) b memory args with
+      | Some st => forall n, run_block P n (layouts_of_body (pg_adts P) b) b 0 st = None
+      | None => False
+      end
+  end ->
+  Diverges (run_with P b memory args).
+Proof.
+  intros H n. unfold run_with.
+  destruct (check_args b args); [contradiction|].
+  destruct (entry_state_from _ b memory args); [|contradiction].
+  apply H.
+Qed.
+
+Lemma run_with_cycles `{Alg : LayoutAlg} (P : program) b memory args (j k : nat) :
+  match check_args b args, entry_state_from (layouts_of_body (pg_adts P) b) b memory args with
+  | None, Some st =>
+      match advance P (layouts_of_body (pg_adts P) b) b j 0 st with
+      | Some (l0, st0) =>
+          advance P (layouts_of_body (pg_adts P) b) b (S k) l0 st0 = Some (l0, st0)
+      | None => False
+      end
+  | _, _ => False
+  end ->
+  Diverges (run_with P b memory args).
+Proof.
+  intros H. apply run_with_diverges.
+  destruct (check_args b args); [contradiction|].
+  destruct (entry_state_from _ b memory args); [|contradiction].
+  exact (diverges_by_cycle P _ b j k 0 _ H).
+Qed.
+
+Lemma run_with_calls_cycling `{Alg : LayoutAlg} (P : program) b memory args (j k : nat) :
+  match check_args b args, entry_state_from (layouts_of_body (pg_adts P) b) b memory args with
+  | None, Some st =>
+      match denote_block P (layouts_of_body (pg_adts P) b) b 0 st with
+      | Ok (Enter callee env' _ _ _) st' =>
+          match advance P env' callee j 0 st' with
+          | Some (l0, st0) => advance P env' callee (S k) l0 st0 = Some (l0, st0)
+          | None => False
+          end
+      | _ => False
+      end
+  | _, _ => False
+  end ->
+  Diverges (run_with P b memory args).
+Proof.
+  intros H. apply run_with_diverges.
+  destruct (check_args b args); [contradiction|].
+  destruct (entry_state_from _ b memory args); [|contradiction].
+  exact (diverges_in_cycling_callee P _ b 0 _ j k H).
 Qed.
 
 Inductive answer :=
@@ -977,7 +1085,8 @@ Theorem means_under_deterministic `{Alg : LayoutAlg} (P : program) :
   forall b args a a', MeansUnder P b args a -> MeansUnder P b args a' -> a = a'.
 Proof.
   intros b args a a' [o [Ht Ha]] [o' [Ht' Ha']].
-  rewrite (terminates_deterministic _ _ _ Ht Ht') in Ha. congruence.
+  rewrite (terminates_deterministic _ _ _ (run_with_monotone P b [] args) Ht Ht') in Ha.
+  congruence.
 Qed.
 
 Theorem means_in_deterministic `{Alg : LayoutAlg} :
@@ -1033,7 +1142,9 @@ Theorem means_with_deterministic `{Alg : LayoutAlg} (P : program) :
     a = a' /\ st = st'.
 Proof.
   intros b memory args a a' st st' [o [Ht [Ha Hs]]] [o' [Ht' [Ha' Hs']]].
-  rewrite (terminates_deterministic _ _ _ Ht Ht') in Ha, Hs. split; congruence.
+  rewrite (terminates_deterministic _ _ _ (run_with_monotone P b memory args) Ht Ht')
+    in Ha, Hs.
+  split; congruence.
 Qed.
 
 Theorem means_from_deterministic `{Alg : LayoutAlg} :
@@ -1063,24 +1174,6 @@ Proof.
   intros b memory args a st H. exact (means_with_within (only_adts adts) n b memory args a st H).
 Qed.
 
-Lemma run_with_diverges `{Alg : LayoutAlg} (P : program) (n k : nat) :
-  forall b memory args,
-    match check_args b args with
-    | Some _ => False
-    | None =>
-        match entry_state_from (cf_env (start P b)) b memory args with
-        | Some st =>
-            match advance (step P) n (start P b) st with
-            | Some (c, st') => advance (step P) (S k) c st' = Some (c, st')
-            | None => False
-            end
-        | None => False
-        end
-    end ->
-    Diverges (run_with P b memory args).
-Proof.
-  intros b memory args H. unfold run_with.
-  destruct (check_args b args); [contradiction|].
-  destruct (entry_state_from (cf_env (start P b)) b memory args) as [st|]; [|contradiction].
-  exact (diverges_by_cycle (step P) n k (start P b) st H).
-Qed.
+End Semantics.
+
+#[global] Existing Instance bump_addr.

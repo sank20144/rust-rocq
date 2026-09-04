@@ -121,7 +121,9 @@ Inductive ub_reason :=
   | UbInvalidLayout
   | UbPointerArithmeticOverflow
   | UbCopyNonOverlappingOverlap
-  | UbReachedUnreachable.
+  | UbReachedUnreachable
+  | UbDivisionByZero
+  | UbDivisionOverflow.
 
 Definition invalid_deref_reason : ub_reason := UbInvalidDeref.
 Definition uninitialized_read_reason : ub_reason := UbReadUninitialized.
@@ -1259,6 +1261,7 @@ Definition permissive_memory_policy : memory_policy :=
 Record allocation := AllocationData {
   allocation_size : nat;
   allocation_align : nat;
+  allocation_base : Z;
   allocation_shape : value_shape;
   allocation_bytes : list byte;
   allocation_init : list bool;
@@ -1266,29 +1269,53 @@ Record allocation := AllocationData {
   allocation_live : bool;
 }.
 
-Definition Allocation (size align : nat) (shape : value_shape)
+Definition Allocation (size align : nat) (base : Z) (shape : value_shape)
     (bytes : list byte) (init : list bool) (live : bool) : allocation :=
-  AllocationData size align shape bytes init
+  AllocationData size align base shape bytes init
     (repeat None (List.length bytes)) live.
 
-Definition AllocationWithProvenance (size align : nat) (shape : value_shape)
+Definition AllocationWithProvenance (size align : nat) (base : Z) (shape : value_shape)
     (bytes : list byte) (init : list bool)
     (provenance : list (option pointer_provenance)) (live : bool)
     : allocation :=
-  AllocationData size align shape bytes init provenance live.
+  AllocationData size align base shape bytes init provenance live.
 
 Definition memory_state := list allocation.
 
 Definition empty_memory : memory_state := [].
 
+Definition allocation_end (a : allocation) : Z :=
+  allocation_base a + Z.of_nat (Nat.max 1 (allocation_size a)).
+
+Definition address_space_end : Z := 2 ^ Z.of_nat (8 * pointer_bytes).
+
+Class AddrAlg := {
+  choose_base : memory_state -> nat -> nat -> option Z;
+  choose_base_positive : forall m size align base,
+    choose_base m size align = Some base -> 0 < base;
+  choose_base_aligned : forall m size align base,
+    choose_base m size align = Some base -> Z.modulo base (Z.of_nat align) = 0;
+  choose_base_fits : forall m size align base,
+    choose_base m size align = Some base ->
+    base + Z.of_nat (Nat.max 1 size) <= address_space_end;
+  choose_base_disjoint : forall m size align base a,
+    choose_base m size align = Some base -> In a m -> allocation_live a = true ->
+    allocation_end a <= base \/ base + Z.of_nat (Nat.max 1 size) <= allocation_base a;
+}.
+
+Definition with_base (a : allocation) (base : Z) : allocation :=
+  AllocationData (allocation_size a) (allocation_align a) base (allocation_shape a)
+    (allocation_bytes a) (allocation_init a) (allocation_provenance a)
+    (allocation_live a).
+
 Definition value_allocation (value : runtime_value) : allocation :=
   let shape := shape_of_value value in
   match encode_typed_memory_value shape value with
   | Some raw =>
-      AllocationWithProvenance (shape_size shape) (shape_align shape) shape
+      AllocationWithProvenance (shape_size shape) (shape_align shape) 0 shape
         (memory_value_bytes raw) (memory_value_init raw)
         (memory_value_provenance raw) true
-  | None => Allocation 0 1 shape [] [] true
+  | None => Allocation 0 1 0 shape [] [] true
   end.
 
 Definition memory_range_ok
@@ -1464,31 +1491,16 @@ Definition align_up (offset alignment : nat) : option nat :=
       else Some (offset + (alignment - remainder))%nat
   end.
 
-Fixpoint allocation_base_from_memory
-    (next : nat) (allocation_id : nat) (memory : memory_state) : option nat :=
-  match allocation_id, memory with
-  | _, [] => None
-  | O, allocation :: _ => align_up next (allocation_align allocation)
-  | S allocation_id, allocation :: memory =>
-      match align_up next (allocation_align allocation) with
-      | Some base =>
-          allocation_base_from_memory
-            (base + Nat.max 1 (allocation_size allocation))%nat
-            allocation_id memory
-      | None => None
-      end
-  end.
-
 Definition allocation_base_address_memory
-    (memory : memory_state) (allocation_id : nat) : option nat :=
-  allocation_base_from_memory 4096%nat allocation_id memory.
+    (memory : memory_state) (allocation_id : nat) : option Z :=
+  option_map allocation_base (nth_error memory allocation_id).
 
 Definition absolute_pointer_address_memory
     (memory : memory_state) (pointer : pointer_value) : option Z :=
   match pointer_provenance_of pointer with
   | ProvenanceAllocation allocation =>
       match allocation_base_address_memory memory allocation with
-      | Some base => Some (Z.of_nat base + pointer_address pointer)
+      | Some base => Some (base + pointer_address pointer)
       | None => None
       end
   | ProvenanceNone | ProvenanceExposed _ | ProvenanceFunction _ =>
@@ -1501,7 +1513,7 @@ Definition absolute_address_in_allocation_memory
   match nth_error memory allocation_id,
       allocation_base_address_memory memory allocation_id with
   | Some allocation, Some base =>
-      let relative := address - Z.of_nat base in
+      let relative := address - base in
       if allocation_live allocation && (0 <=? relative) &&
           (relative <=? Z.of_nat (allocation_size allocation)) then
         Some (Z.to_nat relative)
@@ -1728,10 +1740,10 @@ Definition value_allocation_with_layouts
   | Some raw =>
       AllocationWithProvenance
         (shape_size_with_layouts layouts shape)
-        (shape_align_with_layouts layouts shape) shape
+        (shape_align_with_layouts layouts shape) 0 shape
         (memory_value_bytes raw) (memory_value_init raw)
         (memory_value_provenance raw) true
-  | None => Allocation 0 1 shape [] [] true
+  | None => Allocation 0 1 0 shape [] [] true
   end.
 
 Definition typed_value_allocation_with_layouts
@@ -1744,7 +1756,7 @@ Definition typed_value_allocation_with_layouts
         let size := shape_size_with_layouts layouts shape in
         if memory_value_size_ok size raw then
           Some (AllocationWithProvenance size
-            (shape_align_with_layouts layouts shape) shape
+            (shape_align_with_layouts layouts shape) 0 shape
             (memory_value_bytes raw) (memory_value_init raw)
             (memory_value_provenance raw) true)
         else None
@@ -2294,7 +2306,7 @@ Definition write_allocation_operation_result_with_layouts
                 (allocation_provenance allocation))%list in
             match set_nth allocation_id
                 (AllocationWithProvenance (allocation_size allocation)
-                  (allocation_align allocation)
+                  (allocation_align allocation) (allocation_base allocation)
                   (allocation_shape allocation) bytes' init'
                   provenance'
                   (allocation_live allocation))
@@ -2347,11 +2359,21 @@ Definition write_allocation_with_layouts (layouts : layout_env)
   | AccessUb _ | AccessFail => None
   end.
 
+Section Addresses.
+
+Context `{Addr : AddrAlg}.
+
+Definition append_allocation (memory : memory_state) (a : allocation)
+    : option (nat * memory_state) :=
+  match choose_base memory (allocation_size a) (allocation_align a) with
+  | Some base => Some (length memory, (memory ++ [with_base a base])%list)
+  | None => None
+  end.
+
 Definition allocate_value (memory : memory_state) (value : runtime_value)
     : option (nat * memory_state) :=
   match encode_value value with
-  | Some _ =>
-      Some (length memory, (memory ++ [value_allocation value])%list)
+  | Some _ => append_allocation memory (value_allocation value)
   | None => None
   end.
 
@@ -2361,7 +2383,7 @@ Definition allocate_value_with_layouts
   let allocation := value_allocation_with_layouts layouts value in
   if Nat.eqb (allocation_size allocation)
       (shape_size_with_layouts layouts (allocation_shape allocation)) then
-    Some (length memory, (memory ++ [allocation])%list)
+    append_allocation memory allocation
   else None.
 
 Definition uninitialized_allocation_with_layouts
@@ -2370,15 +2392,14 @@ Definition uninitialized_allocation_with_layouts
   else
     let size := shape_size_with_layouts layouts shape in
     Some (AllocationWithProvenance size
-      (shape_align_with_layouts layouts shape) shape
+      (shape_align_with_layouts layouts shape) 0 shape
       (repeat 0 size) (repeat false size) (repeat None size) true).
 
 Definition allocate_uninitialized_with_layouts
     (layouts : layout_env) (memory : memory_state) (shape : value_shape)
     : option (nat * memory_state) :=
   match uninitialized_allocation_with_layouts layouts shape with
-  | Some allocation =>
-      Some (List.length memory, (memory ++ [allocation])%list)
+  | Some allocation => append_allocation memory allocation
   | None => None
   end.
 
@@ -2398,6 +2419,7 @@ Definition deinitialize_allocation (memory : memory_state)
         set_nth allocation_id
           (AllocationWithProvenance
             (allocation_size allocation) (allocation_align allocation)
+            (allocation_base allocation)
             (allocation_shape allocation) (allocation_bytes allocation) init'
             provenance'
             (allocation_live allocation))
@@ -2413,6 +2435,7 @@ Definition kill_allocation (memory : memory_state) (allocation_id : nat)
       set_nth allocation_id
         (AllocationWithProvenance
           (allocation_size allocation) (allocation_align allocation)
+          (allocation_base allocation)
           (allocation_shape allocation) (allocation_bytes allocation)
           (repeat false (allocation_size allocation))
           (repeat None (allocation_size allocation)) false)
@@ -2461,10 +2484,14 @@ Fixpoint initialize_locals (locals : list slot) (memory : memory_state)
       let '(storages, memory') := initialize_locals locals memory in
       (LocalUnallocated :: storages, memory')
   | Init value :: locals =>
-      let allocation_id := length memory in
-      let memory' := (memory ++ [value_allocation value])%list in
-      let '(storages, memory'') := initialize_locals locals memory' in
-      (LocalAllocated allocation_id :: storages, memory'')
+      match append_allocation memory (value_allocation value) with
+      | Some (allocation_id, memory') =>
+          let '(storages, memory'') := initialize_locals locals memory' in
+          (LocalAllocated allocation_id :: storages, memory'')
+      | None =>
+          let '(storages, memory') := initialize_locals locals memory in
+          (LocalUnallocated :: storages, memory')
+      end
   end.
 
 Definition ProgState (locals : list slot) (memory : memory_state) : prog_state :=
@@ -2497,10 +2524,8 @@ Definition add_exposed_allocation (allocation : nat) (exposed : list nat)
   if existsb (Nat.eqb allocation) exposed then exposed
   else allocation :: exposed.
 
-Definition allocation_base_from := allocation_base_from_memory.
-
 Definition allocation_base_address
-    (memory : memory_state) (allocation_id : nat) : option nat :=
+    (memory : memory_state) (allocation_id : nat) : option Z :=
   allocation_base_address_memory memory allocation_id.
 
 Definition absolute_address_of_pointer
@@ -2587,7 +2612,7 @@ Definition pointer_with_address_in_state
   | ProvenanceAllocation allocation =>
       match allocation_base_address (state_memory state) allocation with
       | Some base => PointerValue (ProvenanceAllocation allocation)
-          (address - Z.of_nat base) (pointer_metadata_of pointer)
+          (address - base) (pointer_metadata_of pointer)
       | None => PointerValue (ProvenanceAllocation allocation)
           (pointer_address pointer) (pointer_metadata_of pointer)
       end
@@ -2792,25 +2817,9 @@ Definition exposed_allocation_wf
     (memory : memory_state) (allocation : nat) : bool :=
   Nat.ltb allocation (List.length memory).
 
-Fixpoint memory_end_address_from
-    (next : nat) (memory : memory_state) : option nat :=
-  match memory with
-  | [] => Some next
-  | allocation :: memory =>
-      match align_up next (allocation_align allocation) with
-      | Some base =>
-          memory_end_address_from
-            (base + Nat.max 1 (allocation_size allocation))%nat memory
-      | None => None
-      end
-  end.
-
 Definition memory_addresses_fit (memory : memory_state) : bool :=
-  match memory_end_address_from 4096%nat memory with
-  | Some end_address =>
-      Z.of_nat end_address <? 2 ^ Z.of_nat (8 * pointer_bytes)%nat
-  | None => false
-  end.
+  forallb (fun a => (0 <? allocation_base a) && (allocation_end a <=? address_space_end))
+    memory.
 
 Definition prog_state_wf (layouts : layout_env) (state : prog_state) : bool :=
   let memory := state_memory state in
@@ -3479,6 +3488,68 @@ Definition write_place_with_layouts (layouts : layout_env)
       end
   end.
 
+Definition write_place_result_with_layouts (layouts : layout_env)
+    (target : place) (value : runtime_value)
+    (state : prog_state) : access_result prog_state :=
+  match pl_proj target,
+      nth_error (state_locals state) (pl_local target) with
+  | [], Some LocalUnallocated =>
+      match allocate_local_value_with_layouts layouts (pl_local target) value state with
+      | Some state' => AccessOk state'
+      | None => AccessFail
+      end
+  | _, _ =>
+      match address_of_place_result layouts target state with
+      | AccessOk (shape, allocation, offset) =>
+          match write_allocation_operation_result_with_layouts layouts
+              (state_memory state) allocation offset (TypedOp shape)
+              (OVTyped value) with
+          | AccessOk memory' =>
+              match commit_well_formed_state layouts
+                  (state_with_memory state memory') with
+              | Some state' => AccessOk state'
+              | None => AccessFail
+              end
+          | AccessUb reason => AccessUb reason
+          | AccessFail => AccessFail
+          end
+      | AccessUb reason => AccessUb reason
+      | AccessFail => AccessFail
+      end
+  end.
+
+Lemma write_place_result_agrees layouts target value state state' :
+  write_place_result_with_layouts layouts target value state = AccessOk state' <->
+  write_place_with_layouts layouts target value state = Some state'.
+Proof.
+  unfold write_place_result_with_layouts, write_place_with_layouts,
+    write_allocation_with_layouts.
+  destruct (pl_proj target), (nth_error (state_locals state) (pl_local target))
+    as [[| |]|];
+    try (destruct (allocate_local_value_with_layouts _ _ _ _);
+         split; intros H; congruence);
+    destruct (address_of_place_result layouts target state) as [[[? ?] ?]| |];
+    try (split; intros H; discriminate);
+    destruct (write_allocation_operation_result_with_layouts _ _ _ _ _ _);
+    try (split; intros H; discriminate);
+    destruct (commit_well_formed_state _ _); split; intros H; congruence.
+Qed.
+
+Definition place_initialized_result (layouts : layout_env)
+    (target : place) (state : prog_state) : access_result bool :=
+  match address_of_place_result layouts target state with
+  | AccessOk (shape, allocation, offset) =>
+      match nth_error (state_memory state) allocation with
+      | Some a =>
+          AccessOk (existsb (fun initialized => initialized)
+            (firstn (shape_size_with_layouts layouts shape)
+              (skipn offset (allocation_init a))))
+      | None => AccessFail
+      end
+  | AccessUb reason => AccessUb reason
+  | AccessFail => AccessFail
+  end.
+
 Definition write_place (target : place) (value : runtime_value)
     (state : prog_state) : option prog_state :=
   write_place_with_layouts [] target value state.
@@ -3532,3 +3603,83 @@ Definition invalid_deref_in_place_with_layouts (layouts : layout_env)
 
 Definition invalid_deref_in_place (state : prog_state) (target : place) : Prop :=
   invalid_deref_in_place_with_layouts [] state target.
+
+End Addresses.
+
+Definition bump_next (m : memory_state) : Z :=
+  fold_left (fun acc a => Z.max acc (allocation_end a)) m 4096.
+
+Definition bump_base (m : memory_state) (size align : nat) : option Z :=
+  match align with
+  | O => None
+  | S _ =>
+      let a := Z.of_nat align in
+      let base := ((bump_next m + a - 1) / a) * a in
+      if base + Z.of_nat (Nat.max 1 size) <=? address_space_end then Some base else None
+  end.
+
+Lemma bump_fold_ge : forall m acc, acc <= fold_left (fun acc a => Z.max acc (allocation_end a)) m acc.
+Proof.
+  induction m as [|a m IH]; intros acc; cbn; [lia|].
+  specialize (IH (Z.max acc (allocation_end a))). lia.
+Qed.
+
+Lemma bump_fold_end : forall m acc a,
+  In a m -> allocation_end a <= fold_left (fun acc a => Z.max acc (allocation_end a)) m acc.
+Proof.
+  induction m as [|b m IH]; intros acc a Hin; [destruct Hin|].
+  destruct Hin as [->|Hin]; cbn.
+  - pose proof (bump_fold_ge m (Z.max acc (allocation_end a))). lia.
+  - apply IH. exact Hin.
+Qed.
+
+Lemma bump_base_spec : forall m size align base,
+  bump_base m size align = Some base ->
+  (0 < Z.of_nat align /\ bump_next m <= base /\ Z.modulo base (Z.of_nat align) = 0 /\
+   base + Z.of_nat (Nat.max 1 size) <= address_space_end).
+Proof.
+  intros m size align base H. unfold bump_base in H.
+  destruct align as [|align']; [discriminate|].
+  set (a := Z.of_nat (S align')) in *.
+  destruct (_ <=? _) eqn:Hfit; [|discriminate].
+  injection H as <-. apply Z.leb_le in Hfit.
+  assert (Ha : 0 < a) by lia.
+  split; [exact Ha|]. split.
+  - pose proof (Z.div_mod (bump_next m + a - 1) a ltac:(lia)) as Hdm.
+    pose proof (Z.mod_pos_bound (bump_next m + a - 1) a Ha) as Hb.
+    rewrite Z.mul_comm. lia.
+  - split; [apply Z.mod_mul; lia | exact Hfit].
+Qed.
+
+Lemma bump_positive : forall m size align base,
+  bump_base m size align = Some base -> 0 < base.
+Proof.
+  intros m size align base H. destruct (bump_base_spec m size align base H) as [_ [Hn _]].
+  pose proof (bump_fold_ge m 4096). unfold bump_next in Hn. lia.
+Qed.
+
+Lemma bump_aligned : forall m size align base,
+  bump_base m size align = Some base -> Z.modulo base (Z.of_nat align) = 0.
+Proof. intros m size align base H. apply (bump_base_spec m size align base H). Qed.
+
+Lemma bump_fits : forall m size align base,
+  bump_base m size align = Some base ->
+  base + Z.of_nat (Nat.max 1 size) <= address_space_end.
+Proof. intros m size align base H. apply (bump_base_spec m size align base H). Qed.
+
+Lemma bump_disjoint : forall m size align base a,
+  bump_base m size align = Some base -> In a m -> allocation_live a = true ->
+  allocation_end a <= base \/ base + Z.of_nat (Nat.max 1 size) <= allocation_base a.
+Proof.
+  intros m size align base a H Hin _. left.
+  destruct (bump_base_spec m size align base H) as [_ [Hn _]].
+  pose proof (bump_fold_end m 4096 a Hin). unfold bump_next in Hn. lia.
+Qed.
+
+Definition bump_addr : AddrAlg := {|
+  choose_base := bump_base;
+  choose_base_positive := bump_positive;
+  choose_base_aligned := bump_aligned;
+  choose_base_fits := bump_fits;
+  choose_base_disjoint := bump_disjoint;
+|}.

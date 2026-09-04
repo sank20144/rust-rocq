@@ -47,3 +47,19 @@ Example a_wrong_downcast_is_ub :
   | _ => false
   end = true.
 Proof. vm_compute. reflexivity. Qed.
+
+Example a_declared_discriminant_picks_the_first_arm :
+  MeansIn adts code_value [VAdt "Code" 0 []] (ARet (VBits W32 100)).
+Proof. apply (means_within_in adts 40%nat). vm_compute. reflexivity. Qed.
+
+Example a_declared_discriminant_picks_the_second_arm :
+  MeansIn adts code_value [VAdt "Code" 1 []] (ARet (VBits W32 200)).
+Proof. apply (means_within_in adts 40%nat). vm_compute. reflexivity. Qed.
+
+Example a_negative_discriminant_matches_its_bit_pattern :
+  MeansIn adts level_value [VAdt "Level" 0 []] (ARet (VBits W32 10)).
+Proof. apply (means_within_in adts 40%nat). vm_compute. reflexivity. Qed.
+
+Example a_positive_discriminant_next_to_a_negative_one :
+  MeansIn adts level_value [VAdt "Level" 1 []] (ARet (VBits W32 20)).
+Proof. apply (means_within_in adts 40%nat). vm_compute. reflexivity. Qed.

@@ -34,3 +34,22 @@ pub fn spin(n: u64) -> u64 {
         }
     }
 }
+
+pub fn is_below(a: i32, b: i32) -> bool {
+    a < b
+}
+
+pub fn is_at_most(a: i8, b: i8) -> bool {
+    a <= b
+}
+
+pub fn is_max(x: u128) -> bool {
+    match x {
+        u128::MAX => true,
+        _ => false,
+    }
+}
+
+pub fn quotient(a: i32, b: i32) -> i32 {
+    a / b
+}

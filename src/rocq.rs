@@ -10,6 +10,7 @@ pub enum Term {
     Str(String),
     Nat(u128),
     Int(i128),
+    Bits(u128),
     Bool(bool),
     Tuple(Vec<Term>),
     Note(String, Box<Term>),
@@ -38,6 +39,10 @@ pub fn nat(n: impl Into<u128>) -> Term {
 
 pub fn int(n: impl Into<i128>) -> Term {
     Term::Int(n.into())
+}
+
+pub fn bits(n: u128) -> Term {
+    Term::Bits(n)
 }
 
 pub fn boolean(b: bool) -> Term {
@@ -86,7 +91,7 @@ impl Term {
                 }
             }
             Term::Note(_, term) => term.collect_heads(heads),
-            Term::Str(_) | Term::Nat(_) | Term::Int(_) | Term::Bool(_) => {}
+            Term::Str(_) | Term::Nat(_) | Term::Int(_) | Term::Bits(_) | Term::Bool(_) => {}
         }
     }
 
@@ -112,6 +117,7 @@ impl Term {
             }
             Term::Str(s) => s.len() + s.matches('"').count() + 2,
             Term::Nat(n) => digits(*n),
+            Term::Bits(n) => digits(*n) + 2,
             Term::Int(n) => digits(n.unsigned_abs()) + if *n < 0 { 6 } else { 2 },
             Term::Bool(b) => {
                 if *b {
@@ -171,6 +177,9 @@ impl Term {
             Term::Str(s) => write_string(out, s),
             Term::Nat(n) => {
                 let _ = write!(out, "{n}");
+            }
+            Term::Bits(n) => {
+                let _ = write!(out, "{n}%Z");
             }
             Term::Int(n) => {
                 if *n < 0 {

@@ -365,6 +365,7 @@ Inductive adt_kind := AkStruct | AkEnum | AkUnion.
 Record variant_def := VariantDef {
   vd_name : name;
   vd_index : variant;
+  vd_discr : Z;
   vd_fields : list (name * ty);
 }.
 

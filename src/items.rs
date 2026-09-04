@@ -48,6 +48,11 @@ impl<'tcx> Cx<'tcx> {
             .variants()
             .iter_enumerated()
             .map(|(idx, v)| {
+                let discr = if adt.is_enum() {
+                    adt.discriminant_for_variant(self.tcx, idx).val
+                } else {
+                    0
+                };
                 let fields: Vec<Term> = v
                     .fields
                     .iter()
@@ -61,6 +66,7 @@ impl<'tcx> Cx<'tcx> {
                     vec![
                         rocq::string(v.name.to_string()),
                         rocq::nat(idx.as_u32()),
+                        rocq::bits(discr),
                         rocq::list(fields),
                     ],
                 )
