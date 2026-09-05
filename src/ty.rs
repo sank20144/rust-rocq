@@ -11,16 +11,26 @@ pub struct Cx<'tcx> {
     pub tcx: TyCtxt<'tcx>,
     regions: RefCell<BTreeSet<u32>>,
     file: RefCell<String>,
+    adts_seen: RefCell<Vec<rustc_hir::def_id::DefId>>,
 }
 
 impl<'tcx> Cx<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
-        Cx { tcx, regions: RefCell::new(BTreeSet::new()), file: RefCell::new(String::new()) }
+        Cx {
+            tcx,
+            regions: RefCell::new(BTreeSet::new()),
+            file: RefCell::new(String::new()),
+            adts_seen: RefCell::new(Vec::new()),
+        }
     }
 
     pub fn take_regions(&self) -> Vec<u64> {
         let taken = std::mem::take(&mut *self.regions.borrow_mut());
         taken.into_iter().map(u64::from).collect()
+    }
+
+    pub fn adts_seen(&self) -> Vec<rustc_hir::def_id::DefId> {
+        self.adts_seen.borrow().clone()
     }
 
     pub fn path(&self, def_id: rustc_hir::def_id::DefId) -> Term {
@@ -77,10 +87,13 @@ impl<'tcx> Cx<'tcx> {
             Int(i) => rocq::app("TInt", vec![int_width(*i)]),
             Uint(u) => rocq::app("TUint", vec![uint_width(*u)]),
             Float(f) => rocq::app("TFloat", vec![float_width(*f)]),
-            Adt(def, args) => rocq::app(
-                "TAdt",
-                vec![self.path(def.did()), self.generic_args(args)],
-            ),
+            Adt(def, args) => {
+                let did = def.did();
+                if !self.adts_seen.borrow().contains(&did) {
+                    self.adts_seen.borrow_mut().push(did);
+                }
+                rocq::app("TAdt", vec![self.path(did), self.generic_args(args)])
+            }
             Foreign(def_id) => rocq::app("TForeign", vec![self.path(*def_id)]),
             Str => rocq::atom("TStr"),
             Array(elem, len) => rocq::app("TArray", vec![self.ty(*elem), self.tconst(*len)]),
@@ -161,13 +174,7 @@ impl<'tcx> Cx<'tcx> {
                 "PatOr",
                 vec![rocq::list(alts.iter().map(|p| self.ty_pat(p)).collect())],
             ),
-            ty::PatternKind::NotNull => rocq::app(
-                "PatRange",
-                vec![
-                    rocq::app("CError", vec![rocq::string("not-null")]),
-                    rocq::app("CError", vec![rocq::string("not-null")]),
-                ],
-            ),
+            ty::PatternKind::NotNull => rocq::atom("PatNotNull"),
         }
     }
 

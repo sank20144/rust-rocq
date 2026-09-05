@@ -97,6 +97,7 @@ with subst_ty_pat (args : list garg) (p : ty_pat) {struct p} : ty_pat :=
   match p with
   | PatRange lo hi => PatRange (subst_tconst args lo) (subst_tconst args hi)
   | PatOr alts => PatOr (pats alts)
+  | PatNotNull => PatNotNull
   end.
 
 Definition subst_tys (args : list garg) : list ty -> list ty := map (subst_ty args).

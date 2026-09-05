@@ -40,6 +40,10 @@ impl Output {
         self.impls = impls;
     }
 
+    pub fn add_adts(&mut self, adts: Vec<Term>) {
+        self.adts.extend(adts);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
             && self.adts.is_empty()

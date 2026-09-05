@@ -84,7 +84,8 @@ with dyn_pred :=
 
 with ty_pat :=
   | PatRange (lo hi : tconst)
-  | PatOr (alts : list ty_pat).
+  | PatOr (alts : list ty_pat)
+  | PatNotNull.
 
 Inductive proj_elem :=
   | PDeref

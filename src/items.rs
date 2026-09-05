@@ -33,6 +33,27 @@ pub fn collect(cx: &Cx<'_>) -> Items {
     items
 }
 
+pub fn external_adts(cx: &Cx<'_>) -> Vec<Term> {
+    let mut done: Vec<DefId> = Vec::new();
+    let mut adts = Vec::new();
+    loop {
+        let pending: Vec<DefId> = cx
+            .adts_seen()
+            .into_iter()
+            .filter(|id| !id.is_local() && !done.contains(id))
+            .collect();
+        if pending.is_empty() {
+            break;
+        }
+        for def_id in pending {
+            done.push(def_id);
+            adts.push(cx.adt_def(def_id));
+        }
+    }
+    let _ = cx.take_regions();
+    adts
+}
+
 impl<'tcx> Cx<'tcx> {
     fn adt_def(&self, def_id: DefId) -> Term {
         let adt = self.tcx.adt_def(def_id);

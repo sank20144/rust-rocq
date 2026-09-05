@@ -92,6 +92,8 @@ impl rustc_driver::Callbacks for Frontend {
             }
         }
 
+        out.add_adts(items::external_adts(&cx));
+
         if out.is_empty() {
             return self.finished();
         }
