@@ -59,6 +59,54 @@ Definition of_access {A} (what : string) (r : access_result A) : M A :=
 Definition of_option {A} (what : string) (o : option A) : M A :=
   fun st => match o with Some a => Ok a st | None => Unmodelled what end.
 
+Inductive result :=
+  | Returned (v : runtime_value)
+  | Panicked
+  | Unwound.
+
+Definition call_back : Type :=
+  name -> list garg -> list runtime_value -> prog_state -> option (outcome result).
+
+Definition oracle : Type :=
+  call_back -> layout_env -> name -> list garg -> list runtime_value -> prog_state ->
+  option (outcome result).
+
+Definition callback_le (c1 c2 : call_back) : Prop :=
+  forall f targs vs st o, c1 f targs vs st = Some o -> c2 f targs vs st = Some o.
+
+Definition oracle_monotone (ext : oracle) : Prop :=
+  forall c1 c2, callback_le c1 c2 ->
+  forall env f targs vs st o,
+    ext c1 env f targs vs st = Some o -> ext c2 env f targs vs st = Some o.
+
+Definition model : Type :=
+  layout_env -> name -> list garg -> list runtime_value -> M result.
+
+Definition first_order (m : model) : oracle :=
+  fun _ env f targs vs st => Some (m env f targs vs st).
+
+Lemma first_order_monotone (m : model) : oracle_monotone (first_order m).
+Proof. intros c1 c2 _ env f targs vs st o H. exact H. Qed.
+
+Definition no_model : model := fun _ f _ _ => fail (String.append "no body for " f).
+
+Definition no_models : oracle := first_order no_model.
+
+Definition no_models_monotone : oracle_monotone no_models := first_order_monotone no_model.
+
+Definition no_callback : call_back := fun _ _ _ _ => None.
+
+Record program := MkProgram {
+  pg_adts : list adt_def;
+  pg_bodies : list body;
+  pg_impls : list impl_def;
+  pg_ext : oracle;
+  pg_ext_monotone : oracle_monotone pg_ext;
+}.
+
+Definition only_adts (adts : list adt_def) : program :=
+  MkProgram adts [] [] no_models no_models_monotone.
+
 Section Semantics.
 
 Context `{Addr : AddrAlg}.
@@ -160,15 +208,25 @@ Definition const_value (t : ty) (v : const_value) : M runtime_value :=
   | CvIndirect _ _ => fail "indirect constant"
   end.
 
-Definition denote_const (c : const_op) : M runtime_value :=
+Definition denote_const (P : program) (env : layout_env) (c : const_op) : M runtime_value :=
   match co_const c with
   | KVal v t => const_value t v
   | KTy t (CValue _ z) => const_value t (CvScalar (ScInt z 0))
   | KTy _ _ => fail "type-level constant that is not a value"
-  | KUnevaluated _ _ _ _ => fail "unevaluated constant"
+  | KUnevaluated path args None _ =>
+      fun st =>
+        match pg_ext P no_callback env path args [] st with
+        | Some (Ok (Returned v) st') => Ok v st'
+        | Some (Ok _ _) => Unmodelled "a constant that panics"
+        | Some (Ub r) => Ub r
+        | Some (Unmodelled w) => Unmodelled w
+        | Some (Mismatch w) => Mismatch w
+        | None => Unmodelled "a constant whose model does not finish"
+        end
+  | KUnevaluated _ _ (Some _) _ => fail "promoted constant"
   end.
 
-Definition denote_operand (env : layout_env) (o : operand) : M runtime_value :=
+Definition denote_operand (P : program) (env : layout_env) (o : operand) : M runtime_value :=
   match o with
   | OCopy p => read env p
   | OMove p =>
@@ -177,7 +235,7 @@ Definition denote_operand (env : layout_env) (o : operand) : M runtime_value :=
                 | Some st' => Ok v st'
                 | None => Unmodelled "deinitialise at move"
                 end
-  | OConst c => denote_const c
+  | OConst c => denote_const P env c
   | ORuntimeCheck _ => fail "ORuntimeCheck"
   end.
 
@@ -297,13 +355,13 @@ Definition denote_unop (dst : ty) (op : un_op) (v : runtime_value)
   | UPtrMetadata => fail "UPtrMetadata"
   end.
 
-Fixpoint denote_operands (env : layout_env) (os : list operand)
+Fixpoint denote_operands (P : program) (env : layout_env) (os : list operand)
     : M (list runtime_value) :=
   match os with
   | [] => ret []
   | o :: rest =>
-      v <- denote_operand env o ;;
-      vs <- denote_operands env rest ;;
+      v <- denote_operand P env o ;;
+      vs <- denote_operands P env rest ;;
       ret (v :: vs)
   end.
 
@@ -317,31 +375,48 @@ Definition discriminant_of (adts : list adt_def) (path : name) (k : variant) : o
   | None => None
   end.
 
-Definition denote_rvalue (adts : list adt_def) (env : layout_env) (b : body) (dst : ty)
+Definition denote_cast (src dst : ty) (v : runtime_value) : M runtime_value :=
+  match bits_of dst with
+  | Some (w', sg') =>
+      match v with
+      | VBits w z =>
+          match bits_of src with
+          | Some (_, sg) => ret (VBits w' (wrap w' sg' (interp w sg z)))
+          | None => fail "integer cast from a type that is not an integer"
+          end
+      | VBool b => ret (VBits w' (if b then 1%Z else 0%Z))
+      | VChar z => ret (VBits w' (wrap w' sg' z))
+      | _ => fail "integer cast of a value that is not an integer"
+      end
+  | None => fail "integer cast to a type that is not an integer"
+  end.
+
+Definition denote_rvalue (P : program) (env : layout_env) (b : body) (dst : ty)
     (r : rvalue) : M runtime_value :=
   match r with
-  | RUse o _ => denote_operand env o
+  | RUse o _ => denote_operand P env o
   | RBinaryOp op x y =>
-      vx <- denote_operand env x ;;
-      vy <- denote_operand env y ;;
+      vx <- denote_operand P env x ;;
+      vy <- denote_operand P env y ;;
       denote_binop dst (operand_ty b x) op vx vy
-  | RUnaryOp op o => v <- denote_operand env o ;; denote_unop dst op v
+  | RUnaryOp op o => v <- denote_operand P env o ;; denote_unop dst op v
+  | RCast CkIntToInt o t => v <- denote_operand P env o ;; denote_cast (operand_ty b o) t v
   | RRef _ _ p | RRawPtr _ p =>
       fun st => match address_of_place_with_layouts env p st with
                 | Some v => Ok v st
                 | None => Unmodelled "address of place"
                 end
   | RAggregate AgTuple fs =>
-      vs <- denote_operands env fs ;; ret (VTuple vs)
+      vs <- denote_operands P env fs ;; ret (VTuple vs)
   | RAggregate (AgAdt path v _ None) fs =>
-      vs <- denote_operands env fs ;; ret (VAdt path v vs)
+      vs <- denote_operands P env fs ;; ret (VAdt path v vs)
   | RAggregate (AgAdt _ _ _ (Some _)) _ => fail "union aggregate"
   | RDiscriminant p =>
       v <- read env p ;;
       match v with
       | VAdt path k _ =>
           d <- of_option "discriminant of an ADT with no definition"
-                 (discriminant_of adts path k) ;;
+                 (discriminant_of (pg_adts P) path k) ;;
           match bits_of dst with
           | Some (w, sg) => ret (VBits w (wrap w sg d))
           | None => fail "discriminant into a non-integer destination"
@@ -355,7 +430,7 @@ Definition denote_rvalue (adts : list adt_def) (env : layout_env) (b : body) (ds
   | RAggregate (AgRawPtr _ _) _ => fail "AgRawPtr"
   | RRepeat _ _ => fail "RRepeat"
   | RThreadLocalRef _ => fail "RThreadLocalRef"
-  | RCast _ _ _ => fail "RCast"
+  | RCast _ _ _ => fail "RCast other than an integer cast"
   | RCopyForDeref _ => fail "RCopyForDeref"
   | RWrapUnsafeBinder _ _ => fail "RWrapUnsafeBinder"
   | RReborrow _ _ _ => fail "RReborrow"
@@ -402,11 +477,11 @@ Definition free_frame (env : layout_env) (b : body) : M unit :=
     | None => Unmodelled "free the frame at return"
     end.
 
-Definition denote_statement (adts : list adt_def) (env : layout_env) (b : body)
+Definition denote_statement (P : program) (env : layout_env) (b : body)
     (s : statement) : M unit :=
   match st_kind s with
   | SAssign p r =>
-      v <- denote_rvalue adts env b (place_ty b p) r ;;
+      v <- denote_rvalue P env b (place_ty b p) r ;;
       write env p v
   | SStorageLive l =>
       sh <- of_option "shape of local" (shape_of_layout_ty (local_ty b l)) ;;
@@ -431,30 +506,14 @@ Definition denote_statement (adts : list adt_def) (env : layout_env) (b : body)
   | SIntrinsic _ => fail "SIntrinsic"
   end.
 
-Fixpoint denote_statements (adts : list adt_def) (env : layout_env) (b : body)
+Fixpoint denote_statements (P : program) (env : layout_env) (b : body)
     (ss : list statement) : M unit :=
   match ss with
   | [] => ret tt
-  | s :: rest => denote_statement adts env b s ;;; denote_statements adts env b rest
+  | s :: rest => denote_statement P env b s ;;; denote_statements P env b rest
   end.
 
-Inductive result :=
-  | Returned (v : runtime_value)
-  | Panicked
-  | Unwound.
 
-Definition oracle : Type := name -> list garg -> list runtime_value -> M result.
-
-Definition no_models : oracle := fun f _ _ => fail (String.append "no body for " f).
-
-Record program := MkProgram {
-  pg_adts : list adt_def;
-  pg_bodies : list body;
-  pg_impls : list impl_def;
-  pg_ext : oracle;
-}.
-
-Definition only_adts (adts : list adt_def) : program := MkProgram adts [] [] no_models.
 
 Definition substitution : Type := list (nat * garg).
 
@@ -652,6 +711,8 @@ Inductive control :=
   | Goto (n : block_id)
   | Finish (r : result)
   | Enter (callee : body) (env : layout_env) (saved : list local_storage)
+          (dest : place) (target : option block_id)
+  | Model (f : name) (targs : list garg) (args : list runtime_value)
           (dest : place) (target : option block_id).
 
 Fixpoint switch_target (z : Z) (ts : list (Z * block_id)) (otherwise : block_id)
@@ -682,7 +743,7 @@ Definition denote_call `{Alg : LayoutAlg} (P : program) (env : layout_env) (b : 
   match callee_of b func with
   | None => fail "callee is not a function item"
   | Some (f, targs) =>
-      vs <- denote_operands env args ;;
+      vs <- denote_operands P env args ;;
       fun st =>
         match resolve P f targs with
         | CalleeBody callee =>
@@ -695,16 +756,7 @@ Definition denote_call `{Alg : LayoutAlg} (P : program) (env : layout_env) (b : 
                 | None => Unmodelled "allocate the frame at entry"
                 end
             end
-        | CalleeModel g gargs =>
-            match pg_ext P g gargs vs st with
-            | Ok (Returned v) st' =>
-                (t <- return_to env dest target v ;; ret (Goto t))
-                  (state_with_locals st' (state_locals st))
-            | Ok r st' => Ok (Finish r) (state_with_locals st' (state_locals st))
-            | Ub r => Ub r
-            | Unmodelled w => Unmodelled w
-            | Mismatch w => Mismatch w
-            end
+        | CalleeModel g gargs => Ok (Model g gargs vs dest target) st
         end
   end.
 
@@ -717,13 +769,13 @@ Definition denote_terminator `{Alg : LayoutAlg} (P : program) (env : layout_env)
       free_frame env b ;;;
       ret (Finish (Returned v))
   | TSwitchInt d ts o =>
-      v <- denote_operand env d ;;
+      v <- denote_operand P env d ;;
       match scalar_of v with
       | Some z => ret (Goto (switch_target z ts o))
       | None => fail "switchInt on a non-scalar"
       end
   | TAssert c expected _ target _ =>
-      v <- denote_operand env c ;;
+      v <- denote_operand P env c ;;
       match v with
       | VBool bb => if Bool.eqb bb expected then ret (Goto target)
                     else ret (Finish Panicked)
@@ -761,9 +813,43 @@ Definition denote_block `{Alg : LayoutAlg} (P : program) (env : layout_env) (b :
   match find_block b n with
   | None => fail "no such block"
   | Some blk =>
-      denote_statements (pg_adts P) env b (bb_stmts blk) ;;;
+      denote_statements P env b (bb_stmts blk) ;;;
       denote_terminator P env b (bb_term blk)
   end.
+
+Definition callback_with `{Alg : LayoutAlg} (P : program)
+    (run : layout_env -> body -> prog_state -> option (outcome result))
+    (env : layout_env) : call_back :=
+  fun f targs args st0 =>
+    match resolve P f targs with
+    | CalleeBody callee =>
+        match check_args callee args with
+        | Some why => Some (Mismatch why)
+        | None =>
+            let env' := merge_layouts env (layouts_of_body (pg_adts P) callee) in
+            match enter_frame env' callee args st0 with
+            | Some st1 =>
+                match run env' callee st1 with
+                | Some (Ok r st2) => Some (Ok r (state_with_locals st2 (state_locals st0)))
+                | o => o
+                end
+            | None => Some (Unmodelled "allocate the frame at entry")
+            end
+        end
+    | CalleeModel _ _ => Some (Unmodelled "a model calling a function without a body")
+    end.
+
+Lemma callback_with_le `{Alg : LayoutAlg} (P : program) run1 run2 env :
+  (forall env' callee st o, run1 env' callee st = Some o -> run2 env' callee st = Some o) ->
+  callback_le (callback_with P run1 env) (callback_with P run2 env).
+Proof.
+  intros H f targs args st0 o E. unfold callback_with in *.
+  destruct (resolve P f targs) as [callee|]; [|exact E].
+  destruct (check_args callee args); [exact E|].
+  destruct (enter_frame _ callee args st0) as [st1|]; [|exact E].
+  destruct (run1 _ callee st1) as [o1|] eqn:E1; [|discriminate].
+  rewrite (H _ _ _ _ E1). exact E.
+Qed.
 
 Fixpoint run_block `{Alg : LayoutAlg} (P : program) (n : nat) (env : layout_env) (b : body)
     (l : block_id) (st : prog_state) : option (outcome result) :=
@@ -783,6 +869,22 @@ Fixpoint run_block `{Alg : LayoutAlg} (P : program) (n : nat) (env : layout_env)
               | Mismatch w => Some (Mismatch w)
               end
           | Some (Ok r st'') => Some (Ok r (state_with_locals st'' saved))
+          | Some (Ub r) => Some (Ub r)
+          | Some (Unmodelled w) => Some (Unmodelled w)
+          | Some (Mismatch w) => Some (Mismatch w)
+          | None => None
+          end
+      | Ok (Model g gargs vs dest target) st' =>
+          match pg_ext P (callback_with P (fun env' callee st1 => run_block P n' env' callee 0 st1)
+                           env) env g gargs vs st' with
+          | Some (Ok (Returned v) st'') =>
+              match return_to env dest target v (state_with_locals st'' (state_locals st')) with
+              | Ok t st3 => run_block P n' env b t st3
+              | Ub r => Some (Ub r)
+              | Unmodelled w => Some (Unmodelled w)
+              | Mismatch w => Some (Mismatch w)
+              end
+          | Some (Ok r st'') => Some (Ok r (state_with_locals st'' (state_locals st')))
           | Some (Ub r) => Some (Ub r)
           | Some (Unmodelled w) => Some (Unmodelled w)
           | Some (Mismatch w) => Some (Mismatch w)
@@ -822,7 +924,7 @@ Proof.
   destruct m as [|m]; [lia|].
   cbn [run_block] in *.
   destruct (denote_block P env b l st) as [k st'| | |]; try exact H.
-  destruct k as [l'|r|callee env' saved dest target].
+  destruct k as [l'|r|callee env' saved dest target|g gargs vs dest target].
   - apply IH; [lia | exact H].
   - exact H.
   - destruct (run_block P n env' callee 0 st') as [o1|] eqn:E1; [|discriminate].
@@ -830,6 +932,14 @@ Proof.
     destruct o1 as [[v| |] st''| | |]; try exact H.
     destruct (return_to env dest target v (state_with_locals st'' saved)) as [t st3| | |];
       try exact H.
+    apply IH; [lia | exact H].
+  - destruct (pg_ext P _ env g gargs vs st') as [o1|] eqn:E1; [|discriminate].
+    rewrite (pg_ext_monotone P _ _
+               (callback_with_le P _ _ env
+                  (fun env' callee st1 o2 H2 => IH m env' callee 0 st1 o2 ltac:(lia) H2))
+               env g gargs vs st' o1 E1).
+    destruct o1 as [[v| |] st''| | |]; try exact H.
+    destruct (return_to env dest target v _) as [t st3| | |]; try exact H.
     apply IH; [lia | exact H].
 Qed.
 
@@ -908,7 +1018,7 @@ Lemma advance_add `{Alg : LayoutAlg} (P : program) env b : forall i j l st,
   end.
 Proof.
   induction i as [|i IH]; intros j l st; [reflexivity|].
-  cbn. destruct (denote_block P env b l st) as [[l'| |] st'| | |]; try reflexivity.
+  cbn. destruct (denote_block P env b l st) as [[l'| | |] st'| | |]; try reflexivity.
   apply IH.
 Qed.
 
@@ -919,7 +1029,7 @@ Lemma diverges_after `{Alg : LayoutAlg} (P : program) env b : forall j l st l' s
 Proof.
   induction j as [|j IH]; intros l st l' st' H Hd n; cbn in H.
   - injection H as <- <-. apply Hd.
-  - destruct (denote_block P env b l st) as [[l1| |] st1| | |] eqn:E; try discriminate.
+  - destruct (denote_block P env b l st) as [[l1| | |] st1| | |] eqn:E; try discriminate.
     destruct n as [|n]; [reflexivity|].
     cbn [run_block]. rewrite E. exact (IH l1 st1 l' st' H Hd n).
 Qed.
@@ -950,7 +1060,7 @@ Proof.
   { induction n as [|n IH]; intros i l' st' Hi Hadv; [reflexivity|].
     assert (Hsplit : S k = i + S (k - i)) by lia.
     pose proof Hcycle as Hc. rewrite Hsplit, advance_add, Hadv in Hc. cbn in Hc.
-    destruct (denote_block P env b l' st') as [[l''| |] st''| | |] eqn:E; try discriminate.
+    destruct (denote_block P env b l' st') as [[l''| | |] st''| | |] eqn:E; try discriminate.
     cbn [run_block]. rewrite E.
     destruct (Nat.eq_dec i k) as [->|Hne].
     - rewrite Nat.sub_diag in Hc. cbn in Hc. injection Hc as -> ->.
@@ -968,7 +1078,7 @@ Lemma diverges_in_callee `{Alg : LayoutAlg} (P : program) env b l st :
   end ->
   forall n, run_block P n env b l st = None.
 Proof.
-  destruct (denote_block P env b l st) as [[| |callee env' saved dest target] st'| | |] eqn:E;
+  destruct (denote_block P env b l st) as [[| |callee env' saved dest target|] st'| | |] eqn:E;
     try contradiction.
   intros Hd n. destruct n as [|n]; [reflexivity|].
   rewrite (run_block_call P n env b l st callee env' saved dest target st' E), Hd.
@@ -987,7 +1097,7 @@ Lemma diverges_in_cycling_callee `{Alg : LayoutAlg} (P : program) env b l st (j 
   forall n, run_block P n env b l st = None.
 Proof.
   intros H. apply diverges_in_callee.
-  destruct (denote_block P env b l st) as [[| |callee env' saved dest target] st'| | |];
+  destruct (denote_block P env b l st) as [[| |callee env' saved dest target|] st'| | |];
     try contradiction.
   exact (diverges_by_cycle P env' callee j k 0 st' H).
 Qed.

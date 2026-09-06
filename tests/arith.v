@@ -35,7 +35,7 @@ Proof. apply (means_within 20%nat). vm_compute. reflexivity. Qed.
 Definition one_local : prog_state := local_state [Uninit; Init (VBits W32 7)].
 
 Example a_move_deinitialises_its_source :
-  match denote_operand [] (OMove (Place 1%nat [])) one_local with
+  match denote_operand (only_adts []) [] (OMove (Place 1%nat [])) one_local with
   | Ok v st => (v, read_place_result_with_layouts [] (Place 1%nat []) st)
   | _ => (VUnit, AccessFail)
   end
@@ -43,7 +43,7 @@ Example a_move_deinitialises_its_source :
 Proof. vm_compute. reflexivity. Qed.
 
 Example a_copy_leaves_its_source_alone :
-  match denote_operand [] (OCopy (Place 1%nat [])) one_local with
+  match denote_operand (only_adts []) [] (OCopy (Place 1%nat [])) one_local with
   | Ok v st => (v, read_place_result_with_layouts [] (Place 1%nat []) st)
   | _ => (VUnit, AccessFail)
   end
@@ -110,5 +110,5 @@ Example a_write_to_a_dead_local_is_undefined :
 Proof. vm_compute. reflexivity. Qed.
 
 Example the_runtime_check_operand_cannot_appear_at_this_phase :
-  denote_operand [] (ORuntimeCheck RcUbChecks) (ByteState [] []) = Unmodelled "ORuntimeCheck".
+  denote_operand (only_adts []) [] (ORuntimeCheck RcUbChecks) (ByteState [] []) = Unmodelled "ORuntimeCheck".
 Proof. vm_compute. reflexivity. Qed.

@@ -40,7 +40,7 @@ Example incr_of_nothing :
 Proof. apply (means_within_in adts 40%nat). vm_compute. reflexivity. Qed.
 
 Example a_wrong_downcast_is_ub :
-  match denote_operand []
+  match denote_operand (only_adts []) []
           (OCopy (Place 1%nat [PDowncast None 1%nat; PField 0%nat (TUint W32)]))
           (local_state [Uninit; Init (VAdt "Maybe" 0 [])]) with
   | Ub UbInvalidEnumTag => true

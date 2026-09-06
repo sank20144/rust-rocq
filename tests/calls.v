@@ -5,9 +5,10 @@ Import ListNotations.
 
 Local Open Scope string_scope.
 
-Definition with_models (ext : oracle) : program := MkProgram adts bodies impls ext.
+Definition with_models (m : model) : program :=
+  MkProgram adts bodies impls (first_order m) (first_order_monotone m).
 
-Definition P : program := with_models no_models.
+Definition P : program := with_models no_model.
 
 Definition u32 (z : Z) : runtime_value := VBits W32 z.
 
@@ -158,15 +159,15 @@ Example a_function_without_a_body_or_model :
   MeansUnder P larger [u32 3; u32 5] (AUnmodelled "no body for std::cmp::max").
 Proof. apply (means_under_within P 100). vm_compute. reflexivity. Qed.
 
-Definition max_model : oracle := fun f targs vs st =>
+Definition max_model : model := fun env f targs vs st =>
   if String.eqb f "std::cmp::max" then
     match vs with
     | [VBits w a; VBits _ b] => Ok (Returned (VBits w (Z.max a b))) st
     | _ => Unmodelled "max"
     end
-  else no_models f targs vs st.
+  else no_model env f targs vs st.
 
-Definition swap_model : oracle := fun f targs vs st =>
+Definition swap_model : model := fun env f targs vs st =>
   if String.eqb f "std::mem::swap" then
     match vs with
     | [VPointerValue sa pa; VPointerValue sb pb] =>
@@ -185,13 +186,13 @@ Definition swap_model : oracle := fun f targs vs st =>
         end
     | _ => Unmodelled "swap"
     end
-  else no_models f targs vs st.
+  else no_model env f targs vs st.
 
-Definition abort_as (r : result) : oracle := fun f targs vs st =>
-  if String.eqb f "std::process::abort" then Ok r st else no_models f targs vs st.
+Definition abort_as (r : result) : model := fun env f targs vs st =>
+  if String.eqb f "std::process::abort" then Ok r st else no_model env f targs vs st.
 
-Definition abort_as_ub : oracle := fun f targs vs st =>
-  if String.eqb f "std::process::abort" then Ub UbInvalidScalar else no_models f targs vs st.
+Definition abort_as_ub : model := fun env f targs vs st =>
+  if String.eqb f "std::process::abort" then Ub UbInvalidScalar else no_model env f targs vs st.
 
 Example a_model_supplies_the_result :
   MeansUnder (with_models max_model) larger [u32 3; u32 5] (ARet (u32 5)).
@@ -233,18 +234,18 @@ Definition renamed (n : name) (b : body) : body :=
     (bd_locals b) (bd_blocks b) (bd_regions b) (bd_borrowck b).
 
 Example a_callee_with_the_wrong_argument_type :
-  MeansUnder (MkProgram adts (renamed "double" succ :: bodies) impls no_models)
+  MeansUnder (MkProgram adts (renamed "double" succ :: bodies) impls no_models no_models_monotone)
     quadruple [u32 3] (AMismatch "argument does not match the declared type").
 Proof.
-  apply (means_under_within (MkProgram adts (renamed "double" succ :: bodies) impls no_models) 100).
+  apply (means_under_within (MkProgram adts (renamed "double" succ :: bodies) impls no_models no_models_monotone) 100).
   vm_compute. reflexivity.
 Qed.
 
 Example a_callee_with_the_wrong_number_of_arguments :
-  MeansUnder (MkProgram adts (renamed "double" pick_second :: bodies) impls no_models)
+  MeansUnder (MkProgram adts (renamed "double" pick_second :: bodies) impls no_models no_models_monotone)
     quadruple [u32 3] (AMismatch "wrong number of arguments").
 Proof.
-  apply (means_under_within (MkProgram adts (renamed "double" pick_second :: bodies) impls no_models) 100).
+  apply (means_under_within (MkProgram adts (renamed "double" pick_second :: bodies) impls no_models no_models_monotone) 100).
   vm_compute. reflexivity.
 Qed.
 
