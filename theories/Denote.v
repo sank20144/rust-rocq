@@ -1180,6 +1180,20 @@ Definition MeansUnder `{Alg : LayoutAlg} (P : program) (b : body) (args : list r
     (a : answer) : Prop :=
   exists o, Terminates (run_with P b [] args) o /\ answer_of o = a.
 
+Definition MeansOn `{Alg : LayoutAlg} (P : program) (b : body) (memory : memory_state)
+    (args : list runtime_value) (a : answer) : Prop :=
+  exists o, Terminates (run_with P b memory args) o /\ answer_of o = a.
+
+Lemma means_on_within `{Alg : LayoutAlg} (P : program) (n : nat) :
+  forall b memory args a,
+    option_map answer_of (peek n (run_with P b memory args)) = Some a ->
+    MeansOn P b memory args a.
+Proof.
+  intros b memory args a H.
+  destruct (peek n (run_with P b memory args)) as [o|] eqn:E; cbn in H; [|discriminate].
+  exists o. split; [ apply (peek_terminates n); exact E | congruence ].
+Qed.
+
 Definition MeansIn `{Alg : LayoutAlg} (adts : list adt_def) (b : body) (args : list runtime_value)
     (a : answer) : Prop :=
   MeansUnder (only_adts adts) b args a.

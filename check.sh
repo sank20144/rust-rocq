@@ -87,6 +87,7 @@ check_cargo_fixture() {
     crate=$3
     expected_dir=${4:-}
     deps=${5:-}
+    rocq_test=${6:-}
     fixture_out="$out_root/cargo-$label"
     cargo_target="$out_root/cargo-target/$label"
 
@@ -112,6 +113,14 @@ check_cargo_fixture() {
     if ! rocq compile -Q theories RustRocq -Q "$(dirname "$generated")" Generated \
         "$generated" 2>"$out.err"; then
         echo "FAIL (rocq)"
+        head -20 "$out.err"
+        fail=1
+        return
+    fi
+
+    if [ -n "$rocq_test" ] && ! rocq compile -Q theories RustRocq \
+        -Q "$(dirname "$generated")" Generated "$rocq_test" 2>"$out.err"; then
+        echo "FAIL ($rocq_test)"
         head -20 "$out.err"
         fail=1
         return
@@ -215,7 +224,8 @@ else
         "$oak_dir/Cargo.toml" \
         oak_bitmap_allocator \
         "$oak_dir" \
-        "$include_deps"
+        "$include_deps" \
+        tests/oak.v
 fi
 
 rm -f "$out.err"

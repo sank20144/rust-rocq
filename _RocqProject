@@ -6,3 +6,5 @@ theories/Memory.v
 theories/Subst.v
 theories/LayoutAlg.v
 theories/Denote.v
+theories/Lib/Models.v
+theories/Lib/X86_64.v

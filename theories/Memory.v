@@ -2386,6 +2386,14 @@ Definition allocate_value_with_layouts
     append_allocation memory allocation
   else None.
 
+Definition allocate_typed_value_with_layouts (layouts : layout_env)
+    (memory : memory_state) (shape : value_shape) (value : runtime_value)
+    : option (nat * memory_state) :=
+  match typed_value_allocation_with_layouts layouts shape value with
+  | Some a => append_allocation memory a
+  | None => None
+  end.
+
 Definition uninitialized_allocation_with_layouts
     (layouts : layout_env) (shape : value_shape) : option allocation :=
   if shape_is_unsized shape then None
