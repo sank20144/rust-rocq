@@ -2763,8 +2763,7 @@ Fixpoint initialized_provenance_wf
   | _, _ => false
   end.
 
-Definition allocation_wf
-    (layouts : layout_env) (allocation_count : nat)
+Definition allocation_structure_wf (allocation_count : nat)
     (allocation : allocation) : bool :=
   let size := allocation_size allocation in
   let align := allocation_align allocation in
@@ -2774,10 +2773,6 @@ Definition allocation_wf
   valid_bytes (allocation_bytes allocation) &&
   is_power_of_two align &&
   negb (shape_is_unsized (allocation_shape allocation)) &&
-  (negb (allocation_live allocation) ||
-    (shape_layout_supported layouts (allocation_shape allocation) &&
-     Nat.eqb (shape_size_with_layouts layouts (allocation_shape allocation)) size &&
-     Nat.leb (shape_align_with_layouts layouts (allocation_shape allocation)) align)) &&
   initialized_provenance_wf allocation_count
     (allocation_init allocation) (allocation_provenance allocation) &&
   (allocation_live allocation ||
@@ -2786,6 +2781,20 @@ Definition allocation_wf
      forallb (fun tag =>
        match tag with None => true | Some _ => false end)
        (allocation_provenance allocation))).
+
+Definition allocation_layout_wf (layouts : layout_env) (allocation : allocation) : bool :=
+  negb (allocation_live allocation) ||
+    (shape_layout_supported layouts (allocation_shape allocation) &&
+     Nat.eqb (shape_size_with_layouts layouts (allocation_shape allocation))
+       (allocation_size allocation) &&
+     Nat.leb (shape_align_with_layouts layouts (allocation_shape allocation))
+       (allocation_align allocation)).
+
+Definition allocation_wf
+    (layouts : layout_env) (allocation_count : nat)
+    (allocation : allocation) : bool :=
+  allocation_structure_wf allocation_count allocation &&
+  allocation_layout_wf layouts allocation.
 
 Definition allocation_id_live (memory : memory_state) (allocation_id : nat)
     : bool :=
@@ -2832,7 +2841,7 @@ Definition memory_addresses_fit (memory : memory_state) : bool :=
 Definition prog_state_wf (layouts : layout_env) (state : prog_state) : bool :=
   let memory := state_memory state in
   memory_addresses_fit memory &&
-  forallb (allocation_wf layouts (List.length memory)) memory &&
+  forallb (allocation_structure_wf (List.length memory)) memory &&
   forallb (local_storage_wf memory) (state_locals state) &&
   nat_nodup (local_allocations (state_locals state)) &&
   forallb (exposed_allocation_wf memory)
@@ -3227,11 +3236,23 @@ Definition address_of_place_with_layouts (layouts : layout_env)
     : option runtime_value :=
   match address_of_place_result layouts target state with
   | AccessOk (shape, allocation, offset) =>
+      let slice_pointer element length :=
+        Some (VPointerValue (ShapeSlice element)
+          (PointerValue (ProvenanceAllocation allocation)
+            (Z.of_nat offset) (PointerLength length))) in
       match rev (pl_proj target), shape with
-      | PSubslice _ _ _ :: _, ShapeArray element length =>
-          Some (VPointerValue (ShapeSlice element)
-            (PointerValue (ProvenanceAllocation allocation)
-              (Z.of_nat offset) (PointerLength length)))
+      | PSubslice _ _ _ :: _, ShapeArray element length => slice_pointer element length
+      | PDeref :: rest, ShapeArray element length =>
+          match address_of_place_result layouts (Place (pl_local target) (rev rest)) state with
+          | AccessOk (base_shape, base_allocation, base_offset) =>
+              match read_allocation_result_with_layouts layouts (state_memory state)
+                      base_allocation base_offset base_shape with
+              | AccessOk (VPointerValue (ShapeSlice _) (PointerValue _ _ (PointerLength _))) =>
+                  slice_pointer element length
+              | _ => Some (VPointer shape allocation offset)
+              end
+          | _ => Some (VPointer shape allocation offset)
+          end
       | _, _ => Some (VPointer shape allocation offset)
       end
   | _ => None

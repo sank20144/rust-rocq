@@ -107,13 +107,74 @@ Record program := MkProgram {
 Definition only_adts (adts : list adt_def) : program :=
   MkProgram adts [] [] no_models no_models_monotone.
 
+Definition is_phantom (t : ty) : bool :=
+  match t with
+  | TAdt p _ => String.eqb p "core::marker::PhantomData" || String.eqb p "std::marker::PhantomData"
+  | _ => false
+  end.
+
+Definition transparent_tail (adts : list adt_def) (path : name) (args : list garg) : option ty :=
+  match find (fun a => String.eqb (ad_path a) path) adts with
+  | Some a =>
+      if existsb (String.eqb "transparent") (ad_repr a) then
+        match ad_kind a, ad_variants a with
+        | AkStruct, [v] =>
+            match rev (map (fun f => subst_ty args (snd f)) (vd_fields v)) with
+            | TSlice e :: rest => if forallb is_phantom rest then Some (TSlice e) else None
+            | TStr :: rest => if forallb is_phantom rest then Some TStr else None
+            | _ => None
+            end
+        | _, _ => None
+        end
+      else None
+  | None => None
+  end.
+
+Fixpoint normalize_ty_fuel (fuel : nat) (adts : list adt_def) (t : ty) : ty :=
+  match fuel with
+  | O => t
+  | S fuel =>
+      let go := normalize_ty_fuel fuel adts in
+      let garg g := match g with GTy t' => GTy (go t') | _ => g end in
+      match t with
+      | TAdt p a =>
+          match transparent_tail adts p a with
+          | Some tail => go tail
+          | None => TAdt p (map garg a)
+          end
+      | TArray e n => TArray (go e) n
+      | TSlice e => TSlice (go e)
+      | TRawPtr p m => TRawPtr (go p) m
+      | TRef r p m => TRef r (go p) m
+      | TTuple es => TTuple (map go es)
+      | _ => t
+      end
+  end.
+
+Definition normalize_ty (adts : list adt_def) (t : ty) : ty := normalize_ty_fuel 32 adts t.
+
+Definition normalize_body (adts : list adt_def) (b : body) : body :=
+  Body (bd_name b) (bd_file b) (bd_span b) (bd_generics b) (bd_bounds b) (bd_arg_count b)
+    (map (fun d => LocalDecl (normalize_ty adts (ld_ty d)) (ld_mut d) (ld_name d) (ld_span d))
+         (bd_locals b))
+    (bd_blocks b) (bd_regions b) (bd_borrowck b).
+
+Definition normalize_adts (adts : list adt_def) : list adt_def :=
+  map (fun a =>
+         AdtDef (ad_path a) (ad_kind a) (ad_generics a)
+           (map (fun v => VariantDef (vd_name v) (vd_index v) (vd_discr v)
+                            (map (fun f => (fst f, normalize_ty adts (snd f))) (vd_fields v)))
+                (ad_variants a))
+           (ad_repr a))
+      adts.
+
 Section Semantics.
 
 Context `{Addr : AddrAlg}.
 
 Definition layouts_of_body `{Alg : LayoutAlg} (adts : list adt_def) (b : body)
     : layout_env :=
-  layout_env_of adts (map ld_ty (bd_locals b)).
+  layout_env_of (normalize_adts adts) (map ld_ty (bd_locals b)).
 
 Definition read (env : layout_env) (p : place) : M runtime_value :=
   fun st => of_access "read place" (read_place_result_with_layouts env p st) st.
@@ -640,7 +701,7 @@ Definition resolve (P : program) (f : name) (targs : list garg) : callee :=
     | None => (f, targs)
     end in
   match find_body P g with
-  | Some b => CalleeBody (subst_body gargs b)
+  | Some b => CalleeBody (normalize_body (pg_adts P) (subst_body gargs b))
   | None => CalleeModel g gargs
   end.
 
@@ -943,9 +1004,12 @@ Proof.
     apply IH; [lia | exact H].
 Qed.
 
+Definition entry_body (P : program) (b : body) : body := normalize_body (pg_adts P) b.
+
 Definition run_with `{Alg : LayoutAlg} (P : program) (b : body) (memory : memory_state)
     (args : list runtime_value) : bounded (outcome result) :=
   fun n =>
+    let b := entry_body P b in
     match check_args b args with
     | Some why => Some (Mismatch why)
     | None =>
@@ -960,9 +1024,9 @@ Lemma run_with_monotone `{Alg : LayoutAlg} (P : program) b memory args :
   Monotone (run_with P b memory args).
 Proof.
   intros n m o Hle H. unfold run_with in *.
-  destruct (check_args b args); [exact H|].
-  destruct (entry_state_from _ b memory args); [|exact H].
-  exact (run_block_monotone P n m _ b 0 _ o Hle H).
+  destruct (check_args (entry_body P b) args); [exact H|].
+  destruct (entry_state_from _ (entry_body P b) memory args); [|exact H].
+  exact (run_block_monotone P n m _ _ 0 _ o Hle H).
 Qed.
 
 Definition run_from `{Alg : LayoutAlg} (adts : list adt_def) (b : body)
@@ -1103,28 +1167,34 @@ Proof.
 Qed.
 
 Lemma run_with_diverges `{Alg : LayoutAlg} (P : program) b memory args :
-  match check_args b args with
+  match check_args (entry_body P b) args with
   | Some _ => False
   | None =>
-      match entry_state_from (layouts_of_body (pg_adts P) b) b memory args with
-      | Some st => forall n, run_block P n (layouts_of_body (pg_adts P) b) b 0 st = None
+      match entry_state_from (layouts_of_body (pg_adts P) (entry_body P b)) (entry_body P b)
+              memory args with
+      | Some st =>
+          forall n, run_block P n (layouts_of_body (pg_adts P) (entry_body P b)) (entry_body P b)
+                      0 st = None
       | None => False
       end
   end ->
   Diverges (run_with P b memory args).
 Proof.
   intros H n. unfold run_with.
-  destruct (check_args b args); [contradiction|].
-  destruct (entry_state_from _ b memory args); [|contradiction].
+  destruct (check_args (entry_body P b) args); [contradiction|].
+  destruct (entry_state_from _ (entry_body P b) memory args); [|contradiction].
   apply H.
 Qed.
 
 Lemma run_with_cycles `{Alg : LayoutAlg} (P : program) b memory args (j k : nat) :
-  match check_args b args, entry_state_from (layouts_of_body (pg_adts P) b) b memory args with
+  match check_args (entry_body P b) args,
+        entry_state_from (layouts_of_body (pg_adts P) (entry_body P b)) (entry_body P b)
+          memory args with
   | None, Some st =>
-      match advance P (layouts_of_body (pg_adts P) b) b j 0 st with
+      match advance P (layouts_of_body (pg_adts P) (entry_body P b)) (entry_body P b) j 0 st with
       | Some (l0, st0) =>
-          advance P (layouts_of_body (pg_adts P) b) b (S k) l0 st0 = Some (l0, st0)
+          advance P (layouts_of_body (pg_adts P) (entry_body P b)) (entry_body P b) (S k) l0 st0
+            = Some (l0, st0)
       | None => False
       end
   | _, _ => False
@@ -1132,15 +1202,17 @@ Lemma run_with_cycles `{Alg : LayoutAlg} (P : program) b memory args (j k : nat)
   Diverges (run_with P b memory args).
 Proof.
   intros H. apply run_with_diverges.
-  destruct (check_args b args); [contradiction|].
-  destruct (entry_state_from _ b memory args); [|contradiction].
-  exact (diverges_by_cycle P _ b j k 0 _ H).
+  destruct (check_args (entry_body P b) args); [contradiction|].
+  destruct (entry_state_from _ (entry_body P b) memory args); [|contradiction].
+  exact (diverges_by_cycle P _ _ j k 0 _ H).
 Qed.
 
 Lemma run_with_calls_cycling `{Alg : LayoutAlg} (P : program) b memory args (j k : nat) :
-  match check_args b args, entry_state_from (layouts_of_body (pg_adts P) b) b memory args with
+  match check_args (entry_body P b) args,
+        entry_state_from (layouts_of_body (pg_adts P) (entry_body P b)) (entry_body P b)
+          memory args with
   | None, Some st =>
-      match denote_block P (layouts_of_body (pg_adts P) b) b 0 st with
+      match denote_block P (layouts_of_body (pg_adts P) (entry_body P b)) (entry_body P b) 0 st with
       | Ok (Enter callee env' _ _ _) st' =>
           match advance P env' callee j 0 st' with
           | Some (l0, st0) => advance P env' callee (S k) l0 st0 = Some (l0, st0)
@@ -1153,9 +1225,9 @@ Lemma run_with_calls_cycling `{Alg : LayoutAlg} (P : program) b memory args (j k
   Diverges (run_with P b memory args).
 Proof.
   intros H. apply run_with_diverges.
-  destruct (check_args b args); [contradiction|].
-  destruct (entry_state_from _ b memory args); [|contradiction].
-  exact (diverges_in_cycling_callee P _ b 0 _ j k H).
+  destruct (check_args (entry_body P b) args); [contradiction|].
+  destruct (entry_state_from _ (entry_body P b) memory args); [|contradiction].
+  exact (diverges_in_cycling_callee P _ _ 0 _ j k H).
 Qed.
 
 Inductive answer :=
