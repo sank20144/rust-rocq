@@ -36,11 +36,6 @@ Record variant_layout := VariantLayoutData {
   variant_abi : abi_layout;
 }.
 
-Definition VariantLayout
-    (index size : nat) (uninhabited : bool)
-    (offsets : list nat) (abi : abi_layout) : variant_layout :=
-  VariantLayoutData index size uninhabited [] offsets abi.
-
 Definition VariantLayoutWithFields
     (index size : nat) (uninhabited : bool)
     (field_types : list ty) (offsets : list nat) (abi : abi_layout)
@@ -73,12 +68,6 @@ Record type_layout := TypeLayoutData {
   layout_variants : variants_layout;
   layout_abi : abi_layout;
 }.
-
-Definition TypeLayout
-    (id : string) (t : ty) (size align : nat) (uninhabited : bool)
-    (fields : fields_layout) (variants : variants_layout) (abi : abi_layout)
-    : type_layout :=
-  TypeLayoutData id t size align uninhabited [] fields variants abi.
 
 Definition TypeLayoutWithFields
     (id : string) (t : ty) (size align : nat) (uninhabited : bool)

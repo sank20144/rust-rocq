@@ -79,20 +79,6 @@ Definition VPointer (pointee : value_shape) (allocation offset : nat)
     (PointerValue (ProvenanceAllocation allocation) (Z.of_nat offset)
       PointerThin).
 
-Definition VPointerWithoutProvenance (pointee : value_shape) (address : Z)
-    : runtime_value :=
-  VPointerValue pointee (PointerValue ProvenanceNone address PointerThin).
-
-Definition pointer_allocation_offset (pointer : pointer_value)
-    : option (nat * nat) :=
-  match pointer_provenance_of pointer with
-  | ProvenanceAllocation allocation =>
-      if 0 <=? pointer_address pointer then
-        Some (allocation, Z.to_nat (pointer_address pointer))
-      else None
-  | ProvenanceNone | ProvenanceExposed _ | ProvenanceFunction _ => None
-  end.
-
 Definition pointer_length (pointer : pointer_value) : option nat :=
   match pointer_metadata_of pointer with
   | PointerLength length => Some length
@@ -124,12 +110,6 @@ Inductive ub_reason :=
   | UbReachedUnreachable
   | UbDivisionByZero
   | UbDivisionOverflow.
-
-Definition invalid_deref_reason : ub_reason := UbInvalidDeref.
-Definition uninitialized_read_reason : ub_reason := UbReadUninitialized.
-Definition dead_read_reason : ub_reason := UbReadDead.
-Definition overlapping_copy_reason : ub_reason :=
-  UbCopyNonOverlappingOverlap.
 
 Fixpoint set_nth {A : Type} (index : nat) (value : A) (values : list A)
     : option (list A) :=
@@ -360,71 +340,6 @@ Definition find_layout_for_shape (layouts : layout_env) (shape : value_shape)
   | _ => None
   end.
 
-Fixpoint shape_layout_supported_fuel
-    (fuel : nat) (layouts : layout_env) (shape : value_shape) : bool :=
-  match fuel with
-  | O => false
-  | S fuel =>
-      let fix shapes_supported (shapes : list value_shape) : bool :=
-        match shapes with
-        | [] => true
-        | shape :: shapes =>
-            shape_layout_supported_fuel fuel layouts shape &&
-            shapes_supported shapes
-        end in
-      match shape with
-      | ShapeUnit | ShapeNever | ShapeBool | ShapeChar | ShapeFloat _ | ShapeBits _
-      | ShapeStr => true
-      | ShapePointer pointee | ShapeSlice pointee =>
-          shape_layout_supported_fuel fuel layouts pointee
-      | ShapeReference _ pointee | ShapeRawPointer _ pointee =>
-          match find_layout_for_shape layouts shape with
-          | Some _ => shape_layout_supported_fuel fuel layouts pointee
-          | None => false
-          end
-      | ShapeArray element _ =>
-          match find_layout_for_shape layouts shape with
-          | Some _ => shape_layout_supported_fuel fuel layouts element
-          | None => false
-          end
-      | ShapeTuple fields | ShapeAdt _ _ fields =>
-          match find_layout_for_shape layouts shape with
-          | Some _ => shapes_supported fields
-          | None => false
-          end
-      | ShapeAdtType adt =>
-          match find_type_layout layouts adt with
-          | Some layout =>
-              let fix tys_supported (tys : list ty) : bool :=
-                match tys with
-                | [] => true
-                | t :: tys =>
-                    match shape_of_layout_ty_fuel fuel t with
-                    | Some shape =>
-                        shape_layout_supported_fuel fuel layouts shape &&
-                        tys_supported tys
-                    | None => false
-                    end
-                end in
-              let top_supported :=
-                tys_supported (layout_field_types layout) in
-              let variants_supported :=
-                match layout_variants layout with
-                | VariantsEmpty | VariantsSingle _ => true
-                | VariantsMultiple _ _ _ variants =>
-                    forallb (fun variant =>
-                      tys_supported (variant_field_types variant)) variants
-                end in
-              top_supported && variants_supported
-          | None => false
-          end
-      end
-  end.
-
-Definition shape_layout_supported
-    (layouts : layout_env) (shape : value_shape) : bool :=
-  shape_layout_supported_fuel 64%nat layouts shape.
-
 Definition scalar_layout_size (scalar : scalar_layout) : nat :=
   match scalar_primitive scalar with
   | PrimInt bits _ | PrimFloat bits | PrimPointer _ bits =>
@@ -599,13 +514,6 @@ Definition layout_of_shape_with_layouts (layouts : layout_env)
     (shape_size_with_layouts layouts shape)
     (shape_align_with_layouts layouts shape).
 
-Definition operation_type_layout (operation : operation_type)
-    : operation_layout :=
-  match operation with
-  | TypedOp shape => layout_of_shape_with_layouts [] shape
-  | UntypedOp layout => layout
-  end.
-
 Definition operation_type_layout_with_layouts
     (layouts : layout_env) (operation : operation_type) : operation_layout :=
   match operation with
@@ -669,10 +577,6 @@ Fixpoint all_initialized (init : list bool) : bool :=
 Definition range_available {A : Type} (offset length : nat) (values : list A)
     : bool :=
   Nat.leb (offset + length) (List.length values).
-
-Definition initialized_range (offset length : nat) (init : list bool) : bool :=
-  range_available offset length init &&
-  all_initialized (firstn length (skipn offset init)).
 
 Definition aligned_offset (offset alignment : nat) : bool :=
   match alignment with
@@ -756,62 +660,6 @@ Fixpoint decode_unsigned (bytes : list byte) : Z :=
   | [] => 0
   | byte :: bytes => byte + 256 * decode_unsigned bytes
   end.
-
-Fixpoint encode_value_fuel (fuel : nat) (value : runtime_value)
-    : option (list byte) :=
-  match fuel with
-  | O => None
-  | S fuel =>
-      let fix encode_values (values : list runtime_value)
-          : option (list byte) :=
-        match values with
-        | [] => Some []
-        | value :: values =>
-            match encode_value_fuel fuel value, encode_values values with
-            | Some bytes, Some bytes' => Some (bytes ++ bytes')%list
-            | _, _ => None
-            end
-        end in
-      if valid_runtime_value value then
-        match value with
-        | VUnit => Some []
-        | VBool false => Some [0]
-        | VBool true => Some [1]
-        | VChar value => Some (encode_unsigned 4 value)
-        | VFloatBits width bits =>
-            Some (encode_unsigned (Nat.div width 8) bits)
-        | VBits width bits => Some (encode_unsigned (int_width_bytes width) bits)
-        | VPointerValue _ pointer =>
-            match pointer_metadata_of pointer with
-            | PointerThin =>
-                Some (encode_unsigned pointer_bytes
-                  (pointer_address pointer))
-            | PointerLength length =>
-                Some (encode_unsigned pointer_bytes
-                    (pointer_address pointer) ++
-                  encode_unsigned pointer_bytes (Z.of_nat length))%list
-            | PointerVTable _ address =>
-                Some (encode_unsigned pointer_bytes
-                    (pointer_address pointer) ++
-                  encode_unsigned pointer_bytes address)%list
-            end
-        | VFunction _ => None
-        | VArray _ fields => encode_values fields
-        | VTuple fields => encode_values fields
-        | VAdt _ variant fields =>
-            match encode_values fields with
-            | Some bytes =>
-                Some (encode_unsigned pointer_bytes (Z.of_nat variant) ++ bytes)%list
-            | None => None
-            end
-        | VUnion _ _ _ => None
-        | VRawAggregate _ bytes _ _ => Some bytes
-        end
-      else None
-  end.
-
-Definition encode_value (value : runtime_value) : option (list byte) :=
-  encode_value_fuel shape_recursion_fuel value.
 
 Fixpoint value_shape_eqb_fuel (fuel : nat)
     (lhs rhs : value_shape) : bool :=
@@ -1296,8 +1144,6 @@ Definition AllocationWithProvenance (size align : nat) (base : Z) (shape : value
 
 Definition memory_state := list allocation.
 
-Definition empty_memory : memory_state := [].
-
 Definition allocation_end (a : allocation) : Z :=
   allocation_base a + Z.of_nat (Nat.max 1 (allocation_size a)).
 
@@ -1331,22 +1177,6 @@ Definition value_allocation (value : runtime_value) : allocation :=
         (memory_value_provenance raw) true
   | None => Allocation 0 1 0 shape [] [] true
   end.
-
-Definition memory_range_ok
-    (policy_check : nat -> nat -> operation_type -> bool)
-    (allocation_id offset : nat) (allocation : allocation)
-    (operation : operation_type) : bool :=
-  let layout := operation_type_layout operation in
-  let size := operation_layout_size layout in
-  let align := operation_layout_align layout in
-  policy_check allocation_id offset operation &&
-  allocation_live allocation &&
-  Nat.leb (offset + size) (allocation_size allocation) &&
-  range_available offset size (allocation_bytes allocation) &&
-  range_available offset size (allocation_init allocation) &&
-  range_available offset size (allocation_provenance allocation) &&
-  Nat.leb align (allocation_align allocation) &&
-  aligned_offset offset align.
 
 Inductive access_result (A : Type) :=
   | AccessOk (value : A)
@@ -2002,13 +1832,6 @@ Definition memory_range_result_with_layouts
     AccessUb UbMisaligned
   else AccessOk tt.
 
-Definition memory_range_result
-    (policy_check : nat -> nat -> operation_type -> bool)
-    (allocation_id offset : nat) (allocation : allocation)
-    (operation : operation_type) : access_result unit :=
-  memory_range_result_with_layouts [] policy_check allocation_id offset
-    allocation operation.
-
 Definition mem_cast_result_with_layouts
     (layouts : layout_env) (value : memory_value) (operation : operation_type)
     : access_result operation_value :=
@@ -2030,10 +1853,6 @@ Definition mem_cast_result_with_layouts
     end
   else AccessUb UbInvalidLayout.
 
-Definition mem_cast_result (value : memory_value) (operation : operation_type)
-    : access_result operation_value :=
-  mem_cast_result_with_layouts [] value operation.
-
 Definition memory_access_result_with_layouts
     (layouts : layout_env)
     (policy_check : nat -> nat -> operation_type -> bool)
@@ -2045,13 +1864,6 @@ Definition memory_access_result_with_layouts
         allocation operation
   | None => AccessUb UbDanglingPointer
   end.
-
-Definition memory_access_result
-    (policy_check : nat -> nat -> operation_type -> bool)
-    (memory : memory_state) (allocation_id offset : nat)
-    (operation : operation_type) : access_result unit :=
-  memory_access_result_with_layouts [] policy_check memory allocation_id offset
-    operation.
 
 Definition reference_target_operation
     (layouts : layout_env) (pointee : value_shape) (pointer : pointer_value)
@@ -2205,12 +2017,6 @@ Definition read_allocation_operation_result_with_layouts
   | None => AccessUb UbDanglingPointer
   end.
 
-Definition read_allocation_operation_result (memory : memory_state)
-    (allocation_id offset : nat) (operation : operation_type)
-    : access_result operation_value :=
-  read_allocation_operation_result_with_layouts [] memory allocation_id offset
-    operation.
-
 Definition read_allocation_result_with_layouts
     (layouts : layout_env) (memory : memory_state)
     (allocation_id offset : nat) (shape : value_shape)
@@ -2234,13 +2040,6 @@ Definition read_allocation_result (memory : memory_state)
     : access_result runtime_value :=
   read_allocation_result_with_layouts [] memory allocation_id offset shape.
 
-Definition read_allocation (memory : memory_state) (allocation_id offset : nat)
-    (shape : value_shape) : option runtime_value :=
-  match read_allocation_result memory allocation_id offset shape with
-  | AccessOk value => Some value
-  | _ => None
-  end.
-
 Definition encode_operation_value_as_with_layouts
     (layouts : layout_env) (operation : operation_type)
     (value : operation_value) : option memory_value :=
@@ -2258,10 +2057,6 @@ Definition encode_operation_value_as_with_layouts
       else None
   | _, _ => None
   end.
-
-Definition encode_operation_value_as (operation : operation_type)
-    (value : operation_value) : option memory_value :=
-  encode_operation_value_as_with_layouts [] operation value.
 
 Definition validate_operation_value_references
     (layouts : layout_env) (memory : memory_state)
@@ -2338,32 +2133,6 @@ Definition write_allocation_operation_result_with_layouts
   | AccessFail => AccessFail
   end.
 
-Definition write_allocation_operation_result (memory : memory_state)
-    (allocation_id offset : nat) (operation : operation_type)
-    (value : operation_value) : access_result memory_state :=
-  write_allocation_operation_result_with_layouts [] memory allocation_id offset
-    operation value.
-
-Definition read_allocation_untyped_result (memory : memory_state)
-    (allocation_id offset : nat) (layout : operation_layout)
-    : access_result operation_value :=
-  read_allocation_operation_result memory allocation_id offset
-    (UntypedOp layout).
-
-Definition write_allocation_untyped_result (memory : memory_state)
-    (allocation_id offset : nat) (layout : operation_layout)
-    (value : memory_value) : access_result memory_state :=
-  write_allocation_operation_result memory allocation_id offset
-    (UntypedOp layout) (OVUntyped layout value).
-
-Definition write_allocation (memory : memory_state) (allocation_id offset : nat)
-    (shape : value_shape) (value : runtime_value) : option memory_state :=
-  match write_allocation_operation_result memory allocation_id offset
-      (TypedOp shape) (OVTyped value) with
-  | AccessOk memory' => Some memory'
-  | AccessUb _ | AccessFail => None
-  end.
-
 Definition write_allocation_with_layouts (layouts : layout_env)
     (memory : memory_state) (allocation_id offset : nat)
     (shape : value_shape) (value : runtime_value) : option memory_state :=
@@ -2381,13 +2150,6 @@ Definition append_allocation (memory : memory_state) (a : allocation)
     : option (nat * memory_state) :=
   match choose_base memory (allocation_size a) (allocation_align a) with
   | Some base => Some (length memory, (memory ++ [with_base a base])%list)
-  | None => None
-  end.
-
-Definition allocate_value (memory : memory_state) (value : runtime_value)
-    : option (nat * memory_state) :=
-  match encode_value value with
-  | Some _ => append_allocation memory (value_allocation value)
   | None => None
   end.
 
@@ -2465,22 +2227,6 @@ Definition kill_allocation (memory : memory_state) (allocation_id : nat)
   | None => None
   end.
 
-Definition read_allocation_value (memory : memory_state) (allocation_id : nat)
-    : option runtime_value :=
-  match nth_error memory allocation_id with
-  | Some allocation =>
-      read_allocation memory allocation_id 0 (allocation_shape allocation)
-  | None => None
-  end.
-
-Definition write_allocation_value (memory : memory_state) (allocation_id : nat)
-    (value : runtime_value) : option memory_state :=
-  match nth_error memory allocation_id with
-  | Some allocation =>
-      write_allocation memory allocation_id 0 (allocation_shape allocation) value
-  | None => None
-  end.
-
 Record prog_state := ByteStateData {
   state_locals : list local_storage;
   state_memory : memory_state;
@@ -2520,8 +2266,6 @@ Definition ProgState (locals : list slot) (memory : memory_state) : prog_state :
   let '(storages, memory') := initialize_locals locals memory in
   ByteState storages memory'.
 
-Definition ProgramState := ProgState.
-
 Definition state_with_locals (state : prog_state) (locals : list local_storage)
     : prog_state :=
   ByteStateWithExposed locals (state_memory state)
@@ -2537,154 +2281,14 @@ Definition state_with_locals_memory (state : prog_state)
     (memory : memory_state) : prog_state :=
   ByteStateWithExposed locals memory (state_exposed_allocations state).
 
-Definition state_with_exposed_allocations
-    (state : prog_state) (exposed : list nat) : prog_state :=
-  ByteStateWithExposed (state_locals state) (state_memory state) exposed.
-
-Definition add_exposed_allocation (allocation : nat) (exposed : list nat)
-    : list nat :=
-  if existsb (Nat.eqb allocation) exposed then exposed
-  else allocation :: exposed.
-
-Definition allocation_base_address
-    (memory : memory_state) (allocation_id : nat) : option Z :=
-  allocation_base_address_memory memory allocation_id.
-
-Definition absolute_address_of_pointer
-    (memory : memory_state) (pointer : pointer_value) : option Z :=
-  absolute_pointer_address_memory memory pointer.
-
-Definition pointer_address_in_range (address : Z) : bool :=
-  (0 <=? address) &&
-  (address <? 2 ^ Z.of_nat (8 * pointer_bytes)%nat).
-
 Definition pointer_alignment_result
     (alignment : nat) (pointer : pointer_value) (state : prog_state)
     : access_result unit :=
   pointer_alignment_memory_result (state_memory state) alignment pointer.
 
-Definition expose_pointer_provenance
-    (pointee : value_shape) (pointer : pointer_value) (state : prog_state)
-    : access_result (runtime_value * prog_state) :=
-  match absolute_address_of_pointer (state_memory state) pointer with
-  | None => AccessUb UbDanglingPointer
-  | Some address =>
-      if negb (pointer_address_in_range address) then
-        AccessUb UbPointerArithmeticOverflow
-      else
-        match pointer_provenance_of pointer with
-        | ProvenanceAllocation allocation =>
-            match nth_error (state_memory state) allocation with
-            | Some target =>
-                if allocation_live target then
-                  AccessOk (VBits WSize address,
-                    state_with_exposed_allocations state
-                      (add_exposed_allocation allocation
-                        (state_exposed_allocations state)))
-                else AccessUb UbUseAfterFree
-            | None => AccessUb UbDanglingPointer
-            end
-        | ProvenanceNone | ProvenanceExposed _ =>
-            AccessOk (VBits WSize address, state)
-        | ProvenanceFunction _ =>
-            AccessOk (VBits WSize address, state)
-        end
-  end.
-
-Definition absolute_address_in_allocation
-    (memory : memory_state) (allocation_id : nat) (address : Z)
-    : option nat :=
-  absolute_address_in_allocation_memory memory allocation_id address.
-
-Definition find_exposed_allocation
-    (memory : memory_state) (exposed : list nat) (address : Z)
-    : option (nat * nat) :=
-  find_exposed_allocation_memory memory exposed address.
-
-Definition pointer_with_exposed_provenance
-    (pointee : value_shape) (address : Z) (metadata : pointer_metadata)
-    (state : prog_state) : runtime_value :=
-  match state_exposed_allocations state with
-  | [] => VPointerValue pointee
-      (PointerValue ProvenanceNone address metadata)
-  | allocations => VPointerValue pointee
-      (PointerValue (ProvenanceExposed allocations) address metadata)
-  end.
-
-Definition pointer_with_exposed_provenance_result
-    (pointee : value_shape) (address : Z) (metadata : pointer_metadata)
-    (state : prog_state) : access_result runtime_value :=
-  if pointer_address_in_range address then
-    AccessOk (pointer_with_exposed_provenance pointee address metadata state)
-  else AccessUb UbPointerArithmeticOverflow.
-
-Definition pointer_without_provenance
-    (pointee : value_shape) (address : Z) (metadata : pointer_metadata)
-    : runtime_value :=
-  VPointerValue pointee (PointerValue ProvenanceNone address metadata).
-
 Definition resolve_pointer_allocation
     (state : prog_state) (pointer : pointer_value) : option (nat * nat) :=
   resolve_pointer_allocation_memory (state_memory state) pointer.
-
-Definition pointer_with_address_in_state
-    (pointer : pointer_value) (address : Z) (state : prog_state)
-    : pointer_value :=
-  match pointer_provenance_of pointer with
-  | ProvenanceAllocation allocation =>
-      match allocation_base_address (state_memory state) allocation with
-      | Some base => PointerValue (ProvenanceAllocation allocation)
-          (address - base) (pointer_metadata_of pointer)
-      | None => PointerValue (ProvenanceAllocation allocation)
-          (pointer_address pointer) (pointer_metadata_of pointer)
-      end
-  | provenance =>
-      PointerValue provenance address (pointer_metadata_of pointer)
-  end.
-
-Definition offset_pointer_inbounds
-    (pointer : pointer_value) (delta : Z) (state : prog_state)
-    : access_result pointer_value :=
-  match pointer_provenance_of pointer with
-  | ProvenanceAllocation allocation =>
-      match nth_error (state_memory state) allocation with
-      | Some target =>
-          if allocation_live target then
-            let offset := pointer_address pointer + delta in
-            if (0 <=? offset) &&
-                (offset <=? Z.of_nat (allocation_size target)) then
-              AccessOk (PointerValue (ProvenanceAllocation allocation)
-                offset (pointer_metadata_of pointer))
-            else AccessUb UbOutOfBounds
-          else AccessUb UbUseAfterFree
-      | None => AccessUb UbDanglingPointer
-      end
-  | ProvenanceExposed allocations =>
-      match find_exposed_allocation (state_memory state) allocations
-          (pointer_address pointer) with
-      | Some (allocation, current_offset) =>
-          match nth_error (state_memory state) allocation with
-          | Some target =>
-              let offset := Z.of_nat current_offset + delta in
-              if (0 <=? offset) &&
-                  (offset <=? Z.of_nat (allocation_size target)) then
-                AccessOk (PointerValue (ProvenanceAllocation allocation)
-                  offset (pointer_metadata_of pointer))
-              else AccessUb UbOutOfBounds
-          | None => AccessUb UbDanglingPointer
-          end
-      | None => AccessUb UbInvalidPointerProvenance
-      end
-  | ProvenanceNone => AccessUb UbInvalidPointerProvenance
-  | ProvenanceFunction _ => AccessUb UbInvalidPointerProvenance
-  end.
-
-Definition wrapping_offset_pointer
-    (pointer : pointer_value) (delta : Z) : pointer_value :=
-  PointerValue (pointer_provenance_of pointer)
-    (Z.modulo (pointer_address pointer + delta)
-      (2 ^ Z.of_nat (8 * pointer_bytes)%nat))
-    (pointer_metadata_of pointer).
 
 Definition read_through_pointer_result
     (layouts : layout_env) (pointee : value_shape) (pointer : pointer_value)
@@ -2796,20 +2400,6 @@ Definition allocation_structure_wf (allocation_count : nat)
        match tag with None => true | Some _ => false end)
        (allocation_provenance allocation))).
 
-Definition allocation_layout_wf (layouts : layout_env) (allocation : allocation) : bool :=
-  negb (allocation_live allocation) ||
-    (shape_layout_supported layouts (allocation_shape allocation) &&
-     Nat.eqb (shape_size_with_layouts layouts (allocation_shape allocation))
-       (allocation_size allocation) &&
-     Nat.leb (shape_align_with_layouts layouts (allocation_shape allocation))
-       (allocation_align allocation)).
-
-Definition allocation_wf
-    (layouts : layout_env) (allocation_count : nat)
-    (allocation : allocation) : bool :=
-  allocation_structure_wf allocation_count allocation &&
-  allocation_layout_wf layouts allocation.
-
 Definition allocation_id_live (memory : memory_state) (allocation_id : nat)
     : bool :=
   match nth_error memory allocation_id with
@@ -2894,17 +2484,6 @@ Definition read_local_result (local : nat) (state : prog_state)
   | AccessFail => AccessFail
   end.
 
-Definition read_local (local : nat) (state : prog_state)
-    : option runtime_value :=
-  match read_local_result local state with
-  | AccessOk value => Some value
-  | _ => None
-  end.
-
-Definition local_read_ub_reason (state : prog_state) (local : nat)
-    (reason : ub_reason) : Prop :=
-  read_local_result local state = AccessUb reason.
-
 Definition runtime_index_result (state : prog_state) (local : nat)
     : access_result nat :=
   match read_local_result local state with
@@ -2912,12 +2491,6 @@ Definition runtime_index_result (state : prog_state) (local : nat)
   | AccessOk _ => AccessFail
   | AccessUb reason => AccessUb reason
   | AccessFail => AccessFail
-  end.
-
-Definition runtime_index (state : prog_state) (local : nat) : option nat :=
-  match runtime_index_result state local with
-  | AccessOk index => Some index
-  | _ => None
   end.
 
 Fixpoint shapes_prefix_size (index : nat) (shapes : list value_shape) : nat :=
@@ -2939,14 +2512,6 @@ Definition subslice_count {A : Type} (from from_end : nat)
 Definition subslice_list {A : Type} (from from_end : nat)
     (values : list A) : list A :=
   firstn (subslice_count from from_end values) (skipn from values).
-
-Definition replace_subslice {A : Type} (from from_end : nat)
-    (values replacement : list A) : option (list A) :=
-  if subslice_available from from_end values &&
-     Nat.eqb (length replacement) (subslice_count from from_end values) then
-    Some (firstn from values ++ replacement ++
-      skipn (Nat.sub (length values) from_end) values)%list
-  else None.
 
 Definition constant_projection_index {A : Type} (offset min_length : nat)
     (from_end : bool) (values : list A) : option nat :=
@@ -3228,12 +2793,6 @@ Fixpoint address_projections_result (layouts : layout_env) (state : prog_state)
       end
   end.
 
-Definition address_projections (state : prog_state)
-    (shape : value_shape) (allocation offset : nat)
-    (projections : list proj_elem)
-    : access_result (value_shape * nat * nat) :=
-  address_projections_result [] state shape allocation offset projections.
-
 Definition address_of_place_result (layouts : layout_env)
     (target : place) (state : prog_state)
     : access_result (value_shape * nat * nat) :=
@@ -3272,77 +2831,6 @@ Definition address_of_place_with_layouts (layouts : layout_env)
   | _ => None
   end.
 
-Definition address_of_place (target : place) (state : prog_state)
-    : option runtime_value :=
-  address_of_place_with_layouts [] target state.
-
-Definition place_range_with_layouts (layouts : layout_env)
-    (target : place) (state : prog_state)
-    : option (value_shape * nat * nat * nat) :=
-  match address_of_place_result layouts target state with
-  | AccessOk (shape, allocation, offset) =>
-      Some (shape, allocation, offset, shape_size_with_layouts layouts shape)
-  | _ => None
-  end.
-
-Definition place_range (target : place) (state : prog_state)
-    : option (value_shape * nat * nat * nat) :=
-  place_range_with_layouts [] target state.
-
-Definition denote_borrow_with_layouts (layouts : layout_env)
-    (_kind : borrow_kind) (borrowed : place)
-    (state : prog_state) : option (runtime_value * prog_state) :=
-  match place_range_with_layouts layouts borrowed state with
-  | Some (shape, allocation, offset, _) =>
-      match read_allocation_result_with_layouts layouts (state_memory state)
-          allocation offset shape with
-      | AccessOk _ =>
-          match rev (pl_proj borrowed), shape with
-          | PSubslice _ _ _ :: _, ShapeArray element length =>
-              Some (VPointerValue (ShapeSlice element)
-                (PointerValue (ProvenanceAllocation allocation)
-                  (Z.of_nat offset) (PointerLength length)), state)
-          | _, _ => Some (VPointer shape allocation offset, state)
-          end
-      | AccessUb _ | AccessFail => None
-      end
-  | None => None
-  end.
-
-Definition denote_borrow (kind : borrow_kind) (borrowed : place)
-    (state : prog_state) : option (runtime_value * prog_state) :=
-  denote_borrow_with_layouts [] kind borrowed state.
-
-Definition write_access_result (memory : memory_state)
-    (allocation_id offset : nat) (shape : value_shape)
-    : access_result unit :=
-  memory_access_result (policy_may_write permissive_memory_policy)
-    memory allocation_id offset (TypedOp shape).
-
-Definition write_access_result_with_layouts (layouts : layout_env)
-    (memory : memory_state) (allocation_id offset : nat) (shape : value_shape)
-    : access_result unit :=
-  memory_access_result_with_layouts layouts
-    (policy_may_write permissive_memory_policy) memory allocation_id offset
-    (TypedOp shape).
-
-Definition allocate_local_value (local : nat) (value : runtime_value)
-    (state : prog_state) : option prog_state :=
-  match nth_error (state_locals state) local with
-  | Some LocalUnallocated =>
-      match allocate_value (state_memory state) value with
-      | Some (allocation_id, memory') =>
-          match set_nth local (LocalAllocated allocation_id)
-              (state_locals state) with
-          | Some locals => commit_well_formed_state []
-              (state_with_locals_memory state locals memory')
-          | None => None
-          end
-      | None => None
-      end
-  | _ => None
-  end.
-
 Definition allocate_local_value_with_layouts (layouts : layout_env)
     (local : nat) (value : runtime_value) (state : prog_state)
     : option prog_state :=
@@ -3359,26 +2847,6 @@ Definition allocate_local_value_with_layouts (layouts : layout_env)
       | None => None
       end
   | _ => None
-  end.
-
-Definition storage_live_local (local : nat) (state : prog_state)
-    : option prog_state :=
-  match nth_error (state_locals state) local with
-  | Some (LocalAllocated allocation_id) =>
-      match kill_allocation (state_memory state) allocation_id,
-          set_nth local LocalUnallocated (state_locals state) with
-      | Some memory', Some locals =>
-          commit_well_formed_state []
-            (state_with_locals_memory state locals memory')
-      | _, _ => None
-      end
-  | Some _ =>
-      match set_nth local LocalUnallocated (state_locals state) with
-      | Some locals => commit_well_formed_state []
-          (state_with_locals state locals)
-      | None => None
-      end
-  | None => None
   end.
 
 Definition storage_live_local_with_layouts
@@ -3430,10 +2898,6 @@ Definition storage_dead_local_with_layouts (layouts : layout_env)
   | None => None
   end.
 
-Definition storage_dead_local (local : nat) (state : prog_state)
-    : option prog_state :=
-  storage_dead_local_with_layouts [] local state.
-
 Definition deinitialize_place_with_layouts (layouts : layout_env)
     (target : place) (state : prog_state)
     : option prog_state :=
@@ -3448,10 +2912,6 @@ Definition deinitialize_place_with_layouts (layouts : layout_env)
   | AccessUb _ | AccessFail => None
   end.
 
-Definition deinitialize_place (target : place) (state : prog_state)
-    : option prog_state :=
-  deinitialize_place_with_layouts [] target state.
-
 Definition read_place_result_with_layouts (layouts : layout_env)
     (target : place) (state : prog_state)
     : access_result runtime_value :=
@@ -3462,54 +2922,6 @@ Definition read_place_result_with_layouts (layouts : layout_env)
   | AccessUb reason => AccessUb reason
   | AccessFail => AccessFail
   end.
-
-Definition read_place_result (target : place) (state : prog_state)
-    : access_result runtime_value :=
-  read_place_result_with_layouts [] target state.
-
-Definition read_place_with_layouts (layouts : layout_env)
-    (target : place) (state : prog_state)
-    : option runtime_value :=
-  match read_place_result_with_layouts layouts target state with
-  | AccessOk value => Some value
-  | _ => None
-  end.
-
-Definition read_place (target : place) (state : prog_state)
-    : option runtime_value :=
-  read_place_with_layouts [] target state.
-
-Lemma read_local_is_direct_place_read local state :
-  read_local local state = read_place (Place local []) state.
-Proof.
-  unfold read_local, read_local_result, read_place, read_place_with_layouts,
-    read_place_result, read_place_result_with_layouts,
-    address_of_place_result.
-  simpl.
-  destruct (local_address_result state local)
-    as [[[shape allocation] offset] | reason |]; reflexivity.
-Qed.
-
-Lemma local_and_pointer_read_results_agree
-    layouts local state shape allocation :
-  shape_is_unsized shape = false ->
-  shape_size_with_layouts layouts shape <> 0%nat ->
-  local_address_result state local = AccessOk (shape, allocation, 0%nat) ->
-  read_place_result_with_layouts layouts (Place local []) state =
-  read_through_pointer_result layouts shape
-    (PointerValue (ProvenanceAllocation allocation) 0 PointerThin) state.
-Proof.
-  intros Hsized Hnonzero Haddress.
-  unfold read_place_result_with_layouts, address_of_place_result.
-  cbn [pl_local pl_proj].
-  rewrite Haddress. simpl.
-  unfold read_through_pointer_result.
-  rewrite Hsized.
-  assert (Hsize :
-      Nat.eqb (shape_size_with_layouts layouts shape) 0 = false).
-  { apply Nat.eqb_neq. exact Hnonzero. }
-  rewrite Hsize. reflexivity.
-Qed.
 
 Definition write_place_with_layouts (layouts : layout_env)
     (target : place) (value : runtime_value)
@@ -3561,23 +2973,6 @@ Definition write_place_result_with_layouts (layouts : layout_env)
       end
   end.
 
-Lemma write_place_result_agrees layouts target value state state' :
-  write_place_result_with_layouts layouts target value state = AccessOk state' <->
-  write_place_with_layouts layouts target value state = Some state'.
-Proof.
-  unfold write_place_result_with_layouts, write_place_with_layouts,
-    write_allocation_with_layouts.
-  destruct (pl_proj target), (nth_error (state_locals state) (pl_local target))
-    as [[| |]|];
-    try (destruct (allocate_local_value_with_layouts _ _ _ _);
-         split; intros H; congruence);
-    destruct (address_of_place_result layouts target state) as [[[? ?] ?]| |];
-    try (split; intros H; discriminate);
-    destruct (write_allocation_operation_result_with_layouts _ _ _ _ _ _);
-    try (split; intros H; discriminate);
-    destruct (commit_well_formed_state _ _); split; intros H; congruence.
-Qed.
-
 Definition place_initialized_result (layouts : layout_env)
     (target : place) (state : prog_state) : access_result bool :=
   match address_of_place_result layouts target state with
@@ -3592,60 +2987,6 @@ Definition place_initialized_result (layouts : layout_env)
   | AccessUb reason => AccessUb reason
   | AccessFail => AccessFail
   end.
-
-Definition write_place (target : place) (value : runtime_value)
-    (state : prog_state) : option prog_state :=
-  write_place_with_layouts [] target value state.
-
-Definition read_place_ub_reason_with_layouts (layouts : layout_env)
-    (state : prog_state) (target : place) (reason : ub_reason) : Prop :=
-  read_place_result_with_layouts layouts target state = AccessUb reason.
-
-Definition read_place_ub_reason (state : prog_state) (target : place)
-    (reason : ub_reason) : Prop :=
-  read_place_ub_reason_with_layouts [] state target reason.
-
-Definition write_place_ub_reason_with_layouts (layouts : layout_env)
-    (state : prog_state) (target : place) (reason : ub_reason) : Prop :=
-  match pl_proj target with
-  | [] => False
-  | _ =>
-      match address_of_place_result layouts target state with
-      | AccessOk (shape, allocation, offset) =>
-          write_access_result_with_layouts layouts (state_memory state)
-            allocation offset shape = AccessUb reason
-      | AccessUb actual => actual = reason
-      | AccessFail => False
-      end
-  end.
-
-Definition write_place_ub_reason (state : prog_state) (target : place)
-    (reason : ub_reason) : Prop :=
-  write_place_ub_reason_with_layouts [] state target reason.
-
-Definition write_place_value_ub_reason_with_layouts (layouts : layout_env)
-    (state : prog_state) (target : place) (value : runtime_value)
-    (reason : ub_reason) : Prop :=
-  match pl_proj target,
-      nth_error (state_locals state) (pl_local target) with
-  | [], Some LocalUnallocated => False
-  | _, _ =>
-      match address_of_place_result layouts target state with
-      | AccessOk (shape, allocation, offset) =>
-          write_allocation_operation_result_with_layouts layouts
-            (state_memory state) allocation offset (TypedOp shape)
-            (OVTyped value) = AccessUb reason
-      | AccessUb actual => actual = reason
-      | AccessFail => False
-      end
-  end.
-
-Definition invalid_deref_in_place_with_layouts (layouts : layout_env)
-    (state : prog_state) (target : place) : Prop :=
-  read_place_ub_reason_with_layouts layouts state target UbInvalidDeref.
-
-Definition invalid_deref_in_place (state : prog_state) (target : place) : Prop :=
-  invalid_deref_in_place_with_layouts [] state target.
 
 End Addresses.
 

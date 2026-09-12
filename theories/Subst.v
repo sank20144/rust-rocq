@@ -100,7 +100,6 @@ with subst_ty_pat (args : list garg) (p : ty_pat) {struct p} : ty_pat :=
   | PatNotNull => PatNotNull
   end.
 
-Definition subst_tys (args : list garg) : list ty -> list ty := map (subst_ty args).
 Definition subst_gargs (args : list garg) : list garg -> list garg := map (subst_garg args).
 
 Definition subst_bound (args : list garg) (b : bound) : bound :=

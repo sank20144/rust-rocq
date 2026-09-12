@@ -605,8 +605,6 @@ Fixpoint denote_statements (P : program) (env : layout_env) (b : body)
   | s :: rest => denote_statement P env b s ;;; denote_statements P env b rest
   end.
 
-
-
 Definition substitution : Type := list (nat * garg).
 
 Definition bind_param (i : nat) (g : garg) (sub : substitution) : option substitution :=
@@ -1091,9 +1089,6 @@ Proof.
   - rewrite (Hm n' n a' Hle Hn') in Hn. congruence.
 Qed.
 
-Theorem not_both {A} : forall (d : bounded A) a, Terminates d a -> ~ Diverges d.
-Proof. intros d a [n Hn] Hd. rewrite (Hd n) in Hn. discriminate. Qed.
-
 Fixpoint advance `{Alg : LayoutAlg} (P : program) (env : layout_env) (b : body) (k : nat)
     (l : block_id) (st : prog_state) : option (block_id * prog_state) :=
   match k with
@@ -1127,18 +1122,6 @@ Proof.
   - destruct (denote_block P env b l st) as [[l1| | |] st1| | |] eqn:E; try discriminate.
     destruct n as [|n]; [reflexivity|].
     cbn [run_block]. rewrite E. exact (IH l1 st1 l' st' H Hd n).
-Qed.
-
-Lemma diverges_by_invariant `{Alg : LayoutAlg} (P : program) env b
-    (Inv : block_id -> prog_state -> Prop) :
-  (forall l st, Inv l st ->
-     exists l' st', denote_block P env b l st = Ok (Goto l') st' /\ Inv l' st') ->
-  forall l st, Inv l st -> forall n, run_block P n env b l st = None.
-Proof.
-  intros Hstep l st Hinv n. revert l st Hinv.
-  induction n as [|n IH]; intros l st Hinv; [reflexivity|].
-  destruct (Hstep l st Hinv) as [l' [st' [E Hinv']]].
-  cbn [run_block]. rewrite E. exact (IH l' st' Hinv').
 Qed.
 
 Lemma diverges_by_cycle `{Alg : LayoutAlg} (P : program) env b (j k : nat) l st :
@@ -1215,27 +1198,6 @@ Proof.
   destruct (check_args (entry_body P b) args); [contradiction|].
   destruct (entry_state_from _ (entry_body P b) memory args); [|contradiction].
   apply H.
-Qed.
-
-Lemma run_with_cycles `{Alg : LayoutAlg} (P : program) b memory args (j k : nat) :
-  match check_args (entry_body P b) args,
-        entry_state_from (layouts_of_body (pg_adts P) (entry_body P b)) (entry_body P b)
-          memory args with
-  | None, Some st =>
-      match advance P (layouts_of_body (pg_adts P) (entry_body P b)) (entry_body P b) j 0 st with
-      | Some (l0, st0) =>
-          advance P (layouts_of_body (pg_adts P) (entry_body P b)) (entry_body P b) (S k) l0 st0
-            = Some (l0, st0)
-      | None => False
-      end
-  | _, _ => False
-  end ->
-  Diverges (run_with P b memory args).
-Proof.
-  intros H. apply run_with_diverges.
-  destruct (check_args (entry_body P b) args); [contradiction|].
-  destruct (entry_state_from _ (entry_body P b) memory args); [|contradiction].
-  exact (diverges_by_cycle P _ _ j k 0 _ H).
 Qed.
 
 Lemma run_with_calls_cycling `{Alg : LayoutAlg} (P : program) b memory args (j k : nat) :
@@ -1362,23 +1324,6 @@ Definition MeansFrom `{Alg : LayoutAlg} (adts : list adt_def) (b : body)
     (memory : memory_state) (args : list runtime_value)
     (a : answer) (st : option prog_state) : Prop :=
   MeansWith (only_adts adts) b memory args a st.
-
-Theorem means_with_deterministic `{Alg : LayoutAlg} (P : program) :
-  forall b memory args a a' st st',
-    MeansWith P b memory args a st -> MeansWith P b memory args a' st' ->
-    a = a' /\ st = st'.
-Proof.
-  intros b memory args a a' st st' [o [Ht [Ha Hs]]] [o' [Ht' [Ha' Hs']]].
-  rewrite (terminates_deterministic _ _ _ (run_with_monotone P b memory args) Ht Ht')
-    in Ha, Hs.
-  split; congruence.
-Qed.
-
-Theorem means_from_deterministic `{Alg : LayoutAlg} :
-  forall adts b memory args a a' st st',
-    MeansFrom adts b memory args a st -> MeansFrom adts b memory args a' st' ->
-    a = a' /\ st = st'.
-Proof. intros adts. apply means_with_deterministic. Qed.
 
 Lemma means_with_within `{Alg : LayoutAlg} (P : program) (n : nat) :
   forall b memory args a st,
