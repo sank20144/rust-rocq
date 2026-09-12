@@ -267,6 +267,8 @@ Fixpoint shape_of_layout_ty_fuel (fuel : nat) (t : ty)
           | Some u => shape_of_layout_ty_fuel fuel u
           | None => None
           end
+      | TPat base _ => shape_of_layout_ty_fuel fuel base
+      | TFnPtr _ => Some (ShapeRawPointer Imm ShapeUnit)
       | _ => None
       end
   end.
@@ -332,6 +334,8 @@ Fixpoint shape_matches_ty_fuel (fuel : nat) (shape : value_shape)
           | Some u => shape_matches_ty_fuel fuel shape u
           | None => false
           end
+      | _, TPat base _ => shape_matches_ty_fuel fuel shape base
+      | ShapeRawPointer _ ShapeUnit, TFnPtr _ | ShapePointer ShapeUnit, TFnPtr _ => true
       | _, _ => false
       end
   end.

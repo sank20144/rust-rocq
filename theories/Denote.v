@@ -253,7 +253,14 @@ Definition operand_ty (b : body) (o : operand) : ty :=
   | ORuntimeCheck _ => TBool
   end.
 
-Definition const_value (t : ty) (v : const_value) : M runtime_value :=
+Definition static_data (env : layout_env) (shape : value_shape) : M nat :=
+  fun st =>
+    match allocate_uninitialized_with_layouts env (state_memory st) shape with
+    | Some (id, memory) => Ok id (state_with_memory st memory)
+    | None => Unmodelled "allocate the data of a constant"
+    end.
+
+Definition const_value (env : layout_env) (t : ty) (v : const_value) : M runtime_value :=
   match v with
   | CvScalar (ScInt z _) =>
       match t with
@@ -263,16 +270,35 @@ Definition const_value (t : ty) (v : const_value) : M runtime_value :=
       | TUint w => ret (VBits w (wrap w false z))
       | _ => fail "scalar constant of a type outside the fragment"
       end
-  | CvScalar (ScPtr _ _ _) => fail "pointer constant"
+  | CvScalar (ScPtr _ off _) =>
+      match t with
+      | TRef _ p _ | TRawPtr p _ =>
+          sh <- of_option "shape of the target of a pointer constant" (shape_of_layout_ty p) ;;
+          id <- static_data env sh ;;
+          ret (VPointerValue sh (PointerValue (ProvenanceAllocation id) off PointerThin))
+      | _ => fail "pointer constant of a type that is not a pointer"
+      end
   | CvZeroSized => ret VUnit
-  | CvSlice _ _ => fail "slice constant"
+  | CvSlice _ meta =>
+      match t with
+      | TRef _ TStr _ =>
+          id <- static_data env (ShapeArray (ShapeBits W8) (Z.to_nat meta)) ;;
+          ret (VPointerValue ShapeStr
+                 (PointerValue (ProvenanceAllocation id) 0 (PointerLength (Z.to_nat meta))))
+      | TRef _ (TSlice e) _ =>
+          sh <- of_option "shape of a slice constant's element" (shape_of_layout_ty e) ;;
+          id <- static_data env (ShapeArray sh (Z.to_nat meta)) ;;
+          ret (VPointerValue (ShapeSlice sh)
+                 (PointerValue (ProvenanceAllocation id) 0 (PointerLength (Z.to_nat meta))))
+      | _ => fail "slice constant of a type that is not a slice reference"
+      end
   | CvIndirect _ _ => fail "indirect constant"
   end.
 
 Definition denote_const (P : program) (env : layout_env) (c : const_op) : M runtime_value :=
   match co_const c with
-  | KVal v t => const_value t v
-  | KTy t (CValue _ z) => const_value t (CvScalar (ScInt z 0))
+  | KVal v t => const_value env t v
+  | KTy t (CValue _ z) => const_value env t (CvScalar (ScInt z 0))
   | KTy _ _ => fail "type-level constant that is not a value"
   | KUnevaluated path args None _ =>
       fun st =>
@@ -484,7 +510,10 @@ Definition denote_rvalue (P : program) (env : layout_env) (b : body) (dst : ty)
           end
       | _ => fail "discriminant of a non-enum value"
       end
-  | RAggregate (AgArray _) _ => fail "AgArray"
+  | RAggregate (AgArray elem) fs =>
+      vs <- denote_operands P env fs ;;
+      sh <- of_option "shape of an array element" (shape_of_layout_ty elem) ;;
+      ret (VArray sh vs)
   | RAggregate (AgClosure _ _) fs =>
       vs <- denote_operands P env fs ;;
       ret (match vs with [] => VUnit | _ => VTuple vs end)

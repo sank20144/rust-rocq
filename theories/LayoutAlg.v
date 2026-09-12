@@ -78,6 +78,7 @@ Fixpoint syn_type_of_fuel (fuel : nat) (adts : list adt_def) (t : ty) : syn_type
           | Some u => go u
           | None => StOpaque
           end
+      | TPat base _ => go base
       | TAdt path args =>
           match find_adt adts path with
           | Some d =>
@@ -391,6 +392,7 @@ Fixpoint reachable_tys_fuel (fuel : nat) (adts : list adt_def) (t : ty) : list t
                | TTuple ts => List.concat (map go ts)
                | TArray e _ | TSlice e => go e
                | TRef _ p _ | TRawPtr p _ => go p
+               | TPat base _ => go base
                | TAdt path args =>
                    match find_adt adts path with
                    | Some d =>
