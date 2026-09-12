@@ -73,6 +73,11 @@ Fixpoint syn_type_of_fuel (fuel : nat) (adts : list adt_def) (t : ty) : syn_type
           | None => StOpaque
           end
       | TSlice _ | TStr | TDynamic _ _ => StUnsized
+      | TClosure _ args =>
+          match closure_upvars args with
+          | Some u => go u
+          | None => StOpaque
+          end
       | TAdt path args =>
           match find_adt adts path with
           | Some d =>
@@ -375,19 +380,27 @@ Fixpoint reachable_tys_fuel (fuel : nat) (adts : list adt_def) (t : ty) : list t
   | O => []
   | S fuel =>
       let go := reachable_tys_fuel fuel adts in
-      t :: match t with
-           | TTuple ts => List.concat (map go ts)
-           | TArray e _ | TSlice e => go e
-           | TRef _ p _ | TRawPtr p _ => go p
-           | TAdt path args =>
-               match find_adt adts path with
-               | Some d =>
-                   List.concat (map (fun v => List.concat (map go (variant_field_tys args v)))
-                               (ad_variants d))
-               | None => []
+      match t with
+      | TClosure _ args =>
+          match closure_upvars args with
+          | Some u => go u
+          | None => []
+          end
+      | _ =>
+          t :: match t with
+               | TTuple ts => List.concat (map go ts)
+               | TArray e _ | TSlice e => go e
+               | TRef _ p _ | TRawPtr p _ => go p
+               | TAdt path args =>
+                   match find_adt adts path with
+                   | Some d =>
+                       List.concat (map (fun v => List.concat (map go (variant_field_tys args v)))
+                                   (ad_variants d))
+                   | None => []
+                   end
+               | _ => []
                end
-           | _ => []
-           end
+      end
   end.
 
 Fixpoint dedup_tys (acc : list ty) (ts : list ty) : list ty :=

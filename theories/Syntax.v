@@ -440,6 +440,9 @@ Definition alias_kind_eqb (a b : alias_kind) : bool :=
   | _, _ => false
   end.
 
+Definition safety_eqb (a b : safety) : bool :=
+  match a, b with Safe, Safe | Unsafe, Unsafe => true | _, _ => false end.
+
 Fixpoint ty_eqb (a b : ty) {struct a} : bool :=
   let fix gargs (xs ys : list garg) : bool :=
     match xs, ys with
@@ -464,6 +467,9 @@ Fixpoint ty_eqb (a b : ty) {struct a} : bool :=
   | TRawPtr p x, TRawPtr q y => andb (ty_eqb p q) (mutability_eqb x y)
   | TRef _ p x, TRef _ q y => andb (ty_eqb p q) (mutability_eqb x y)
   | TFnDef p x, TFnDef q y => andb (String.eqb p q) (gargs x y)
+  | TFnPtr (FnSig i o v sf abi), TFnPtr (FnSig i' o' v' sf' abi') =>
+      andb (tys i i') (andb (ty_eqb o o')
+        (andb (Bool.eqb v v') (andb (safety_eqb sf sf') (String.eqb abi abi'))))
   | TUnsafeBinder x, TUnsafeBinder y => ty_eqb x y
   | TClosure p x, TClosure q y => andb (String.eqb p q) (gargs x y)
   | TCoroutine p x, TCoroutine q y => andb (String.eqb p q) (gargs x y)
@@ -491,4 +497,10 @@ with garg_eqb (a b : garg) {struct a} : bool :=
   | GLifetime _, GLifetime _ => true
   | GConst x, GConst y => tconst_eqb x y
   | _, _ => false
+  end.
+
+Definition closure_upvars (args : list garg) : option ty :=
+  match rev args with
+  | GTy u :: _ => Some u
+  | _ => None
   end.

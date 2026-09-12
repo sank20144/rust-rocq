@@ -10,3 +10,5 @@ theories/Lib/Models.v
 theories/Lib/X86_64.v
 theories/Lib/Core.v
 theories/Lib/Bitvec.v
+theories/Lib/Iter.v
+theories/Lib/Oak.v

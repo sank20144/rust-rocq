@@ -485,7 +485,9 @@ Definition denote_rvalue (P : program) (env : layout_env) (b : body) (dst : ty)
       | _ => fail "discriminant of a non-enum value"
       end
   | RAggregate (AgArray _) _ => fail "AgArray"
-  | RAggregate (AgClosure _ _) _ => fail "AgClosure"
+  | RAggregate (AgClosure _ _) fs =>
+      vs <- denote_operands P env fs ;;
+      ret (match vs with [] => VUnit | _ => VTuple vs end)
   | RAggregate (AgCoroutine _ _) _ => fail "AgCoroutine"
   | RAggregate (AgCoroutineClosure _ _) _ => fail "AgCoroutineClosure"
   | RAggregate (AgRawPtr _ _) _ => fail "AgRawPtr"
@@ -814,7 +816,7 @@ Definition denote_call `{Alg : LayoutAlg} (P : program) (env : layout_env) (b : 
                 let env' := merge_layouts env (layouts_of_body (pg_adts P) callee) in
                 match enter_frame env' callee vs st with
                 | Some st' => Ok (Enter callee env' (state_locals st) dest target) st'
-                | None => Unmodelled "allocate the frame at entry"
+                | None => Unmodelled (String.append "allocate the frame at entry of " (bd_name callee))
                 end
             end
         | CalleeModel g gargs => Ok (Model g gargs vs dest target) st
@@ -894,7 +896,7 @@ Definition callback_with `{Alg : LayoutAlg} (P : program)
                 | Some (Ok r st2) => Some (Ok r (state_with_locals st2 (state_locals st0)))
                 | o => o
                 end
-            | None => Some (Unmodelled "allocate the frame at entry")
+            | None => Some (Unmodelled (String.append "allocate the frame at entry of " (bd_name callee)))
             end
         end
     | CalleeModel _ _ => Some (Unmodelled "a model calling a function without a body")

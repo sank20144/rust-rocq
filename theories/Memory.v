@@ -262,6 +262,11 @@ Fixpoint shape_of_layout_ty_fuel (fuel : nat) (t : ty)
           end
       | TAdt _ _ => Some (ShapeAdtType t)
       | TFnDef _ _ => Some ShapeUnit
+      | TClosure _ args =>
+          match closure_upvars args with
+          | Some u => shape_of_layout_ty_fuel fuel u
+          | None => None
+          end
       | _ => None
       end
   end.
@@ -322,6 +327,11 @@ Fixpoint shape_matches_ty_fuel (fuel : nat) (shape : value_shape)
       | ShapeAdtType exact, TAdt _ _ => ty_eqb exact t
       | ShapeAdt declaration _ _, TAdt declaration' _ =>
           String.eqb declaration declaration'
+      | _, TClosure _ args =>
+          match closure_upvars args with
+          | Some u => shape_matches_ty_fuel fuel shape u
+          | None => false
+          end
       | _, _ => false
       end
   end.

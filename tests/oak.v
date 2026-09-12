@@ -1,5 +1,5 @@
 From RustRocq Require Import Syntax Layout LayoutAlg Memory Subst Denote.
-From RustRocq Require Import Lib.Models Lib.X86_64 Lib.Core Lib.Bitvec.
+From RustRocq Require Import Lib.Models Lib.X86_64 Lib.Core Lib.Bitvec Lib.Iter Lib.Oak.
 From Generated Require Import oak_bitmap_allocator.
 From Stdlib Require Import String List ZArith.
 Import ListNotations.
@@ -10,10 +10,8 @@ Definition size_4k : ty := TAdt "x86_64::structures::paging::Size4KiB" [].
 
 Definition inst (n : Z) : list garg := [GTy size_4k; GConst (CValue (TUint WSize) n)].
 
-Definition oak_model : model := models [x86_64_model; bitvec_model; core_model true].
-
 Definition P : program :=
-  MkProgram adts bodies impls (first_order oak_model) (first_order_monotone oak_model).
+  MkProgram adts bodies impls (oak_oracle true) (oak_oracle_monotone true).
 
 Definition allocator_ty (n : Z) : ty :=
   TAdt "bitmap_frame_allocator::BitmapAllocator" (inst n).
@@ -175,3 +173,27 @@ Proof. apply (means_on_within P 100). vm_compute. reflexivity. Qed.
 Example available_is_valid_and_not_allocated :
   MeansOn P available one_valid [self] (ARet (bit_array [1])).
 Proof. apply (means_on_within P 100). vm_compute. reflexivity. Qed.
+
+Definition largest_available := inst_body bitmap_frame_allocator_BitmapAllocator_S_N_1_largest_available.
+Definition allocate_contiguous :=
+  inst_body bitmap_frame_allocator_BitmapAllocator_S_N_1_allocate_contiguous.
+
+Definition four := Eval vm_compute in mark (holding 1 (allocator [0] [0] 0 16384)) 0 4.
+Definition four_hole := Eval vm_compute in after mark_valid four [self; frames 1 2; VBool false].
+
+Example get_largest :
+  MeansOn P largest_available four [self] (ARet (some (frames 0 4)))
+  /\ MeansOn P largest_available four_hole [self] (ARet (some (frames 2 4))).
+Proof. split; apply (means_on_within P 100); vm_compute; reflexivity. Qed.
+
+Definition three_valid := Eval vm_compute in mark (holding 1 (allocator [0] [0] 0 12288)) 0 3.
+Definition contiguous2 := Eval vm_compute in after allocate_contiguous three_valid [self; VBits WSize 2].
+Definition contiguous1 := Eval vm_compute in after allocate_contiguous contiguous2 [self; VBits WSize 1].
+
+Example test_allocate_contiguous :
+  MeansOn P allocate_contiguous three_valid [self; VBits WSize 4] (ARet none)
+  /\ MeansOn P allocate_contiguous three_valid [self; VBits WSize 2] (ARet (some (frames 0 2)))
+  /\ MeansOn P allocate_contiguous contiguous2 [self; VBits WSize 1] (ARet (some (frames 2 3)))
+  /\ MeansOn P allocate_contiguous contiguous1 [self; VBits WSize 2] (ARet none)
+  /\ MeansOn P allocate_frame contiguous1 [self] (ARet none).
+Proof. repeat split; apply (means_on_within P 100); vm_compute; reflexivity. Qed.
