@@ -1,5 +1,5 @@
 From RustRocq Require Import Syntax Layout LayoutAlg Memory Subst Denote.
-From RustRocq Require Import Lib.Models Lib.X86_64 Lib.Core Lib.Bitvec Lib.Iter Lib.Oak.
+From RustRocq Require Import Lib.Models Lib.X86_64 Lib.Core Lib.Bitvec Lib.Iter Lib.Fmt Lib.Oak.
 From Generated Require Import oak_bitmap_allocator.
 From Stdlib Require Import String List ZArith.
 Import ListNotations.
@@ -197,3 +197,27 @@ Example test_allocate_contiguous :
   /\ MeansOn P allocate_contiguous contiguous1 [self; VBits WSize 2] (ARet none)
   /\ MeansOn P allocate_frame contiguous1 [self] (ARet none).
 Proof. repeat split; apply (means_on_within P 100); vm_compute; reflexivity. Qed.
+
+Definition new0 := subst_body (inst 0) bitmap_frame_allocator_BitmapAllocator_S_N_1_new.
+
+Example silly_allocator_invalid_size :
+  MeansOn P new0 [] [frames 0 1] APanic.
+Proof. apply (means_on_within P 100). vm_compute. reflexivity. Qed.
+
+Example dealloc_unallocated :
+  MeansOn P deallocate_frame one_frame [self; frame_at 0] APanic.
+Proof. apply (means_on_within P 100). vm_compute. reflexivity. Qed.
+
+Definition high_range := Eval vm_compute in holding 1 (allocator [0] [0] 4096 8192).
+
+Example dealloc_outside_lo :
+  MeansOn P deallocate_frame high_range [self; frame_at 0] APanic.
+Proof. apply (means_on_within P 100). vm_compute. reflexivity. Qed.
+
+Example dealloc_outside_hi :
+  MeansOn P deallocate_frame high_range [self; frame_at 2] APanic.
+Proof. apply (means_on_within P 100). vm_compute. reflexivity. Qed.
+
+Example valid_outside_range_lo :
+  MeansOn P mark_valid high_range [self; frames 0 0; VBool true] APanic.
+Proof. apply (means_on_within P 100). vm_compute. reflexivity. Qed.

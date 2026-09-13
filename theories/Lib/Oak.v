@@ -1,5 +1,5 @@
 From RustRocq Require Import Syntax Layout Memory Denote.
-From RustRocq Require Import Lib.Models Lib.X86_64 Lib.Core Lib.Bitvec Lib.Iter.
+From RustRocq Require Import Lib.Models Lib.X86_64 Lib.Core Lib.Bitvec Lib.Iter Lib.Fmt.
 From Stdlib Require Import String List.
 Import ListNotations.
 
@@ -8,7 +8,7 @@ Section Oracle.
 Context `{Addr : AddrAlg}.
 
 Definition oak_first_order (overflow_checks : bool) : model :=
-  models [x86_64_model; bitvec_model; core_model overflow_checks; iter_constructors].
+  models [x86_64_model; bitvec_model; core_model overflow_checks; iter_constructors; fmt_model].
 
 Definition oak_oracle (overflow_checks : bool) : oracle :=
   fun cb env f targs vs st =>
