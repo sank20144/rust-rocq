@@ -115,172 +115,172 @@ Definition view_words_pointer (s : slice_view) : pointer_value :=
 
 Section Views.
 
-Context `{Alg : LayoutAlg} (adts : list adt_def).
+  Context `{Alg : LayoutAlg} (adts : list adt_def).
 
-Definition read_view (s : slice_view) : M (list Z) :=
-  v <- observe "read a bit-slice" (fun st =>
-         read_pointer adts (state_memory st) (words_ty (view_words s)) (view_words_pointer s)) ;;
-  match v with
-  | VArray vs => of_option "bit-slice words that are not u64" (words_of_values vs)
-  | _ => fail "bit-slice words that are not an array"
-  end.
-
-Definition write_view (s : slice_view) (ws : list Z) : M unit :=
-  change "write a bit-slice" (fun st =>
-    m <-? write_pointer adts (state_memory st) (words_ty (view_words s)) (view_words_pointer s)
-            (VArray (map (VBits W64) ws)) ;;
-    AccessOk (state_with_memory st m)).
-
-Definition view_of_array (t : ty) (p : runtime_value) : option slice_view :=
-  match p, array_words t, layout_of adts t with
-  | VPtr (PointerValue prov off _), Some n, Some l =>
-      match field_offset l None 1 with
-      | Some data => Some (SliceView prov (off + Z.of_nat data)%Z 0 (64 * n))
-      | None => None
-      end
-  | _, _, _ => None
-  end.
-
-Definition static_bool (b : bool) : M result :=
-  fun st =>
-    match allocate_value adts (state_memory st) TBool (VBool b) with
-    | Some (id, memory) => Ok (Returned (VPointer id 0)) (state_with_memory st memory)
-    | None => Unmodelled "allocate the static bool of a bit index"
+  Definition read_view (s : slice_view) : M (list Z) :=
+    v <- observe "read a bit-slice" (fun st =>
+           read_pointer adts (state_memory st) (words_ty (view_words s)) (view_words_pointer s)) ;;
+    match v with
+    | VArray vs => of_option "bit-slice words that are not u64" (words_of_values vs)
+    | _ => fail "bit-slice words that are not an array"
     end.
+
+  Definition write_view (s : slice_view) (ws : list Z) : M unit :=
+    change "write a bit-slice" (fun st =>
+      m <-? write_pointer adts (state_memory st) (words_ty (view_words s)) (view_words_pointer s)
+              (VArray (map (VBits W64) ws)) ;;
+      AccessOk (state_with_memory st m)).
+
+  Definition view_of_array (t : ty) (p : runtime_value) : option slice_view :=
+    match p, array_words t, layout_of adts t with
+    | VPtr (PointerValue prov off _), Some n, Some l =>
+        match field_offset l None 1 with
+        | Some data => Some (SliceView prov (off + Z.of_nat data)%Z 0 (64 * n))
+        | None => None
+        end
+    | _, _, _ => None
+    end.
+
+  Definition static_bool (b : bool) : M result :=
+    fun st =>
+      match allocate_value adts (state_memory st) TBool (VBool b) with
+      | Some (id, memory) => Ok (Returned (VPointer id 0)) (state_with_memory st memory)
+      | None => Unmodelled "allocate the static bool of a bit index"
+      end.
 
 End Views.
 
 Section Models.
 
-Context `{Alg : LayoutAlg}.
+  Context `{Alg : LayoutAlg}.
 
-Definition bitvec_model : partial_model := fun adts f targs vs =>
-  if String.eqb f "bitvec::array::BitArray::<A, O>::ZERO" then
-    match targs with
-    | [GTy (TArray (TUint W64) (CValue _ n)); GTy _] =>
-        Some (returned (bit_array_value (repeat 0%Z (Z.to_nat n))))
-    | _ => None
-    end
-  else if String.eqb f "bitvec::mem::elts" then
-    match targs, vs with
-    | [GTy (TUint W64)], [VBits _ n] =>
-        Some (returned (VBits WSize (n / 64 + (if Z.eqb (n mod 64) 0 then 0 else 1))%Z))
-    | _, _ => None
-    end
-  else if String.eqb f "core::ops::Not::not" then
-    match targs, vs with
-    | [GTy t], [v] =>
-        match array_words t, words_of v with
-        | Some _, Some ws =>
-            Some (returned (bit_array_value (map (fun w => Z.lxor w word_mask) ws)))
-        | _, _ => None
-        end
-    | _, _ => None
-    end
-  else if String.eqb f "core::ops::BitAnd::bitand" then
-    match targs, vs with
-    | [GTy t; GTy _], [a; b] =>
-        match array_words t, words_of a, words_of b with
-        | Some _, Some wa, Some wb =>
-            Some (returned (bit_array_value (map (fun p => Z.land (fst p) (snd p))
-                                                 (combine wa wb))))
-        | _, _, _ => None
-        end
-    | _, _ => None
-    end
-  else if String.eqb f "core::ops::Deref::deref" || String.eqb f "core::ops::DerefMut::deref_mut"
-  then
-    match targs, vs with
-    | [GTy t], [p] =>
-        match array_words t with
-        | Some _ =>
-            Some match view_of_array adts t p with
-                 | Some s => returned (view_value s)
-                 | None => fail "BitArray::deref without a layout for the array"
-                 end
-        | None => None
-        end
-    | _, _ => None
-    end
-  else if String.eqb f "core::ops::Index::index" || String.eqb f "core::ops::IndexMut::index_mut"
-  then
-    match targs, vs with
-    | [GTy t; GTy (TUint WSize)], [p; VBits _ i] =>
-        match array_words t with
-        | Some _ =>
-            Some match view_of_array adts t p with
-                 | Some s =>
-                     if Nat.leb (sv_len s) (Z.to_nat i) then panics
-                     else ws <- read_view adts s ;;
-                          static_bool adts (bit_of ws (sv_head s + Z.to_nat i))
-                 | None => fail "BitArray::index without a layout for the array"
-                 end
-        | None => None
-        end
-    | [GTy t; GTy _], [p; r] =>
-        match array_words t, range_of r with
-        | Some _, Some (start, stop) =>
-            Some match view_of_array adts t p with
-                 | Some s =>
-                     if Nat.leb start stop && Nat.leb stop (sv_len s)
-                     then returned (view_value (sub_view s start stop))
-                     else panics
-                 | None => fail "BitArray::index without a layout for the array"
-                 end
-        | _, _ => None
-        end
-    | _, _ => None
-    end
-  else if is_bit_slice_fn f "get_mut" then
-    Some match vs with
-         | [x; r] =>
-             match view_of x, range_of r with
-             | Some s, Some (start, stop) =>
-                 if Nat.leb start stop && Nat.leb stop (sv_len s)
-                 then returned (some_value (view_value (sub_view s start stop)))
-                 else returned none_value
-             | _, _ => fail "BitSlice::get_mut with unexpected arguments"
-             end
-         | _ => fail "BitSlice::get_mut with unexpected arguments"
-         end
-  else if is_bit_slice_fn f "fill" then
-    Some match vs with
-         | [x; VBool b] =>
-             with_view vs (fun s =>
-               ws <- read_view adts s ;;
-               write_view adts s (fill_bits ws (sv_head s) (sv_len s) b) ;;;
-               returned VUnit)
-         | _ => fail "BitSlice::fill with unexpected arguments"
-         end
-  else if is_bit_slice_fn f "set" then
-    Some match vs with
-         | [x; VBits _ i; VBool b] =>
-             with_view vs (fun s =>
-               if Nat.leb (sv_len s) (Z.to_nat i) then panics
-               else ws <- read_view adts s ;;
-                    write_view adts s (with_bit ws (sv_head s + Z.to_nat i) b) ;;;
-                    returned VUnit)
-         | _ => fail "BitSlice::set with unexpected arguments"
-         end
-  else if is_bit_slice_fn f "first_one" then
-    Some (with_view vs (fun s =>
-      ws <- read_view adts s ;;
-      match first_one_bits ws (sv_head s) (sv_len s) with
-      | Some i => returned (some_value (VBits WSize (Z.of_nat i)))
-      | None => returned none_value
-      end))
-  else if is_bit_slice_fn f "count_ones" then
-    Some (with_view vs (fun s =>
-      ws <- read_view adts s ;;
-      returned (VBits WSize (Z.of_nat (count_ones_bits ws (sv_head s) (sv_len s))))))
-  else if is_bit_slice_fn f "all" then
-    Some (with_view vs (fun s =>
-      ws <- read_view adts s ;;
-      returned (VBool (all_bits ws (sv_head s) (sv_len s)))))
-  else if is_bit_slice_fn f "not_all" then
-    Some (with_view vs (fun s =>
-      ws <- read_view adts s ;;
-      returned (VBool (negb (all_bits ws (sv_head s) (sv_len s))))))
-  else None.
+  Definition bitvec_model : partial_model := fun adts f targs vs =>
+    if String.eqb f "bitvec::array::BitArray::<A, O>::ZERO" then
+      match targs with
+      | [GTy (TArray (TUint W64) (CValue _ n)); GTy _] =>
+          Some (returned (bit_array_value (repeat 0%Z (Z.to_nat n))))
+      | _ => None
+      end
+    else if String.eqb f "bitvec::mem::elts" then
+      match targs, vs with
+      | [GTy (TUint W64)], [VBits _ n] =>
+          Some (returned (VBits WSize (n / 64 + (if Z.eqb (n mod 64) 0 then 0 else 1))%Z))
+      | _, _ => None
+      end
+    else if String.eqb f "core::ops::Not::not" then
+      match targs, vs with
+      | [GTy t], [v] =>
+          match array_words t, words_of v with
+          | Some _, Some ws =>
+              Some (returned (bit_array_value (map (fun w => Z.lxor w word_mask) ws)))
+          | _, _ => None
+          end
+      | _, _ => None
+      end
+    else if String.eqb f "core::ops::BitAnd::bitand" then
+      match targs, vs with
+      | [GTy t; GTy _], [a; b] =>
+          match array_words t, words_of a, words_of b with
+          | Some _, Some wa, Some wb =>
+              Some (returned (bit_array_value (map (fun p => Z.land (fst p) (snd p))
+                                                   (combine wa wb))))
+          | _, _, _ => None
+          end
+      | _, _ => None
+      end
+    else if String.eqb f "core::ops::Deref::deref" || String.eqb f "core::ops::DerefMut::deref_mut"
+    then
+      match targs, vs with
+      | [GTy t], [p] =>
+          match array_words t with
+          | Some _ =>
+              Some match view_of_array adts t p with
+                   | Some s => returned (view_value s)
+                   | None => fail "BitArray::deref without a layout for the array"
+                   end
+          | None => None
+          end
+      | _, _ => None
+      end
+    else if String.eqb f "core::ops::Index::index" || String.eqb f "core::ops::IndexMut::index_mut"
+    then
+      match targs, vs with
+      | [GTy t; GTy (TUint WSize)], [p; VBits _ i] =>
+          match array_words t with
+          | Some _ =>
+              Some match view_of_array adts t p with
+                   | Some s =>
+                       if Nat.leb (sv_len s) (Z.to_nat i) then panics
+                       else ws <- read_view adts s ;;
+                            static_bool adts (bit_of ws (sv_head s + Z.to_nat i))
+                   | None => fail "BitArray::index without a layout for the array"
+                   end
+          | None => None
+          end
+      | [GTy t; GTy _], [p; r] =>
+          match array_words t, range_of r with
+          | Some _, Some (start, stop) =>
+              Some match view_of_array adts t p with
+                   | Some s =>
+                       if Nat.leb start stop && Nat.leb stop (sv_len s)
+                       then returned (view_value (sub_view s start stop))
+                       else panics
+                   | None => fail "BitArray::index without a layout for the array"
+                   end
+          | _, _ => None
+          end
+      | _, _ => None
+      end
+    else if is_bit_slice_fn f "get_mut" then
+      Some match vs with
+           | [x; r] =>
+               match view_of x, range_of r with
+               | Some s, Some (start, stop) =>
+                   if Nat.leb start stop && Nat.leb stop (sv_len s)
+                   then returned (some_value (view_value (sub_view s start stop)))
+                   else returned none_value
+               | _, _ => fail "BitSlice::get_mut with unexpected arguments"
+               end
+           | _ => fail "BitSlice::get_mut with unexpected arguments"
+           end
+    else if is_bit_slice_fn f "fill" then
+      Some match vs with
+           | [x; VBool b] =>
+               with_view vs (fun s =>
+                 ws <- read_view adts s ;;
+                 write_view adts s (fill_bits ws (sv_head s) (sv_len s) b) ;;;
+                 returned VUnit)
+           | _ => fail "BitSlice::fill with unexpected arguments"
+           end
+    else if is_bit_slice_fn f "set" then
+      Some match vs with
+           | [x; VBits _ i; VBool b] =>
+               with_view vs (fun s =>
+                 if Nat.leb (sv_len s) (Z.to_nat i) then panics
+                 else ws <- read_view adts s ;;
+                      write_view adts s (with_bit ws (sv_head s + Z.to_nat i) b) ;;;
+                      returned VUnit)
+           | _ => fail "BitSlice::set with unexpected arguments"
+           end
+    else if is_bit_slice_fn f "first_one" then
+      Some (with_view vs (fun s =>
+        ws <- read_view adts s ;;
+        match first_one_bits ws (sv_head s) (sv_len s) with
+        | Some i => returned (some_value (VBits WSize (Z.of_nat i)))
+        | None => returned none_value
+        end))
+    else if is_bit_slice_fn f "count_ones" then
+      Some (with_view vs (fun s =>
+        ws <- read_view adts s ;;
+        returned (VBits WSize (Z.of_nat (count_ones_bits ws (sv_head s) (sv_len s))))))
+    else if is_bit_slice_fn f "all" then
+      Some (with_view vs (fun s =>
+        ws <- read_view adts s ;;
+        returned (VBool (all_bits ws (sv_head s) (sv_len s)))))
+    else if is_bit_slice_fn f "not_all" then
+      Some (with_view vs (fun s =>
+        ws <- read_view adts s ;;
+        returned (VBool (negb (all_bits ws (sv_head s) (sv_len s))))))
+    else None.
 
 End Models.

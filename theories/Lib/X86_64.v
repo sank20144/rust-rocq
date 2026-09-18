@@ -57,85 +57,85 @@ Definition frame_add (size start n : Z) : M result :=
 
 Section X86_64.
 
-Context `{Alg : LayoutAlg}.
+  Context `{Alg : LayoutAlg}.
 
-Definition compare_frames (adts : list adt_def) (frame : ty) (k : Z -> Z -> bool)
-    (x y : runtime_value) : M result :=
-  fx <- read_arg adts frame x ;;
-  fy <- read_arg adts frame y ;;
-  match frame_start fx, frame_start fy with
-  | Some a, Some b => returned (VBool (k a b))
-  | _, _ => fail "a frame comparison on values that are not frames"
-  end.
+  Definition compare_frames (adts : list adt_def) (frame : ty) (k : Z -> Z -> bool)
+      (x y : runtime_value) : M result :=
+    fx <- read_arg adts frame x ;;
+    fy <- read_arg adts frame y ;;
+    match frame_start fx, frame_start fy with
+    | Some a, Some b => returned (VBool (k a b))
+    | _, _ => fail "a frame comparison on values that are not frames"
+    end.
 
-Definition x86_64_model : partial_model := fun adts f targs vs =>
-  if String.eqb f "x86_64::structures::paging::PageSize::SIZE" then
-    Some match targs, vs with
-         | [GTy s], [] =>
-             match page_size s with
-             | Some z => returned (VBits W64 z)
-             | None => fail "PageSize::SIZE of an unknown page size"
-             end
-         | _, _ => fail "PageSize::SIZE with unexpected arguments"
-         end
-  else if String.eqb f "x86_64::structures::paging::PhysFrame::<S>::start_address" then
-    Some match vs with
-         | [fr] =>
-             match frame_start fr with
-             | Some a => returned (phys_addr a)
-             | None => fail "PhysFrame::start_address of a value that is not a frame"
-             end
-         | _ => fail "PhysFrame::start_address with unexpected arguments"
-         end
-  else if String.eqb f "x86_64::PhysAddr::as_u64" then
-    Some match vs with
-         | [a] =>
-             match addr_of a with
-             | Some z => returned (VBits W64 z)
-             | None => fail "PhysAddr::as_u64 of a value that is not an address"
-             end
-         | _ => fail "PhysAddr::as_u64 with unexpected arguments"
-         end
-  else if String.eqb f "x86_64::structures::paging::PhysFrame::<S>::range" then
-    Some match vs with
-         | [s; e] =>
-             match frame_start s, frame_start e with
-             | Some a, Some b => returned (phys_frame_range a b)
-             | _, _ => fail "PhysFrame::range of values that are not frames"
-             end
-         | _ => fail "PhysFrame::range with unexpected arguments"
-         end
-  else if String.eqb f "core::ops::Add::add" then
-    match targs, vs with
-    | [GTy t; GTy (TUint W64)], [fr; VBits W64 n] =>
-        match is_frame_of t with
-        | Some size =>
-            Some match frame_start fr with
-                 | Some a => frame_add size a n
-                 | None => fail "PhysFrame + u64 on a value that is not a frame"
-                 end
-        | None => None
-        end
-    | _, _ => None
-    end
-  else if String.eqb f "core::cmp::PartialOrd::lt" then
-    match targs, vs with
-    | [GTy t; GTy _], [x; y] =>
-        match is_frame_of t with
-        | Some _ => Some (compare_frames adts t Z.ltb x y)
-        | None => None
-        end
-    | _, _ => None
-    end
-  else if String.eqb f "core::cmp::PartialOrd::gt" then
-    match targs, vs with
-    | [GTy t; GTy _], [x; y] =>
-        match is_frame_of t with
-        | Some _ => Some (compare_frames adts t (fun a b => Z.ltb b a) x y)
-        | None => None
-        end
-    | _, _ => None
-    end
-  else None.
+  Definition x86_64_model : partial_model := fun adts f targs vs =>
+    if String.eqb f "x86_64::structures::paging::PageSize::SIZE" then
+      Some match targs, vs with
+           | [GTy s], [] =>
+               match page_size s with
+               | Some z => returned (VBits W64 z)
+               | None => fail "PageSize::SIZE of an unknown page size"
+               end
+           | _, _ => fail "PageSize::SIZE with unexpected arguments"
+           end
+    else if String.eqb f "x86_64::structures::paging::PhysFrame::<S>::start_address" then
+      Some match vs with
+           | [fr] =>
+               match frame_start fr with
+               | Some a => returned (phys_addr a)
+               | None => fail "PhysFrame::start_address of a value that is not a frame"
+               end
+           | _ => fail "PhysFrame::start_address with unexpected arguments"
+           end
+    else if String.eqb f "x86_64::PhysAddr::as_u64" then
+      Some match vs with
+           | [a] =>
+               match addr_of a with
+               | Some z => returned (VBits W64 z)
+               | None => fail "PhysAddr::as_u64 of a value that is not an address"
+               end
+           | _ => fail "PhysAddr::as_u64 with unexpected arguments"
+           end
+    else if String.eqb f "x86_64::structures::paging::PhysFrame::<S>::range" then
+      Some match vs with
+           | [s; e] =>
+               match frame_start s, frame_start e with
+               | Some a, Some b => returned (phys_frame_range a b)
+               | _, _ => fail "PhysFrame::range of values that are not frames"
+               end
+           | _ => fail "PhysFrame::range with unexpected arguments"
+           end
+    else if String.eqb f "core::ops::Add::add" then
+      match targs, vs with
+      | [GTy t; GTy (TUint W64)], [fr; VBits W64 n] =>
+          match is_frame_of t with
+          | Some size =>
+              Some match frame_start fr with
+                   | Some a => frame_add size a n
+                   | None => fail "PhysFrame + u64 on a value that is not a frame"
+                   end
+          | None => None
+          end
+      | _, _ => None
+      end
+    else if String.eqb f "core::cmp::PartialOrd::lt" then
+      match targs, vs with
+      | [GTy t; GTy _], [x; y] =>
+          match is_frame_of t with
+          | Some _ => Some (compare_frames adts t Z.ltb x y)
+          | None => None
+          end
+      | _, _ => None
+      end
+    else if String.eqb f "core::cmp::PartialOrd::gt" then
+      match targs, vs with
+      | [GTy t; GTy _], [x; y] =>
+          match is_frame_of t with
+          | Some _ => Some (compare_frames adts t (fun a b => Z.ltb b a) x y)
+          | None => None
+          end
+      | _, _ => None
+      end
+    else None.
 
 End X86_64.

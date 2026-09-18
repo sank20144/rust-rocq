@@ -117,30 +117,31 @@ Qed.
 
 Section Pointers.
 
-Context `{Alg : LayoutAlg} (adts : list adt_def).
+  Context `{Alg : LayoutAlg} (adts : list adt_def).
 
-Definition read_arg (t : ty) (v : runtime_value) : M runtime_value :=
-  match v with
-  | VPtr p =>
-      observe "read through a model's argument" (fun st => read_pointer adts (state_memory st) t p)
-  | _ => fail "a model expected a pointer argument"
-  end.
-
-Definition write_arg (t : ty) (p v : runtime_value) : M unit :=
-  match p with
-  | VPtr ptr =>
-      change "write through a model's argument" (fun st =>
-        m <-? write_pointer adts (state_memory st) t ptr v ;;
-        AccessOk (state_with_memory st m))
-  | _ => fail "a model expected a pointer argument"
-  end.
-
-Definition alloc_temp (t : ty) (v : runtime_value) : HM runtime_value :=
-  fun st =>
-    match allocate_value adts (state_memory st) t v with
-    | Some (id, memory) => Some (Ok (inl (VPointer id 0)) (state_with_memory st memory))
-    | None => Some (Unmodelled "allocate a model's temporary")
+  Definition read_arg (t : ty) (v : runtime_value) : M runtime_value :=
+    match v with
+    | VPtr p =>
+        observe "read through a model's argument" (fun st =>
+          read_pointer adts (state_memory st) t p)
+    | _ => fail "a model expected a pointer argument"
     end.
+
+  Definition write_arg (t : ty) (p v : runtime_value) : M unit :=
+    match p with
+    | VPtr ptr =>
+        change "write through a model's argument" (fun st =>
+          m <-? write_pointer adts (state_memory st) t ptr v ;;
+          AccessOk (state_with_memory st m))
+    | _ => fail "a model expected a pointer argument"
+    end.
+
+  Definition alloc_temp (t : ty) (v : runtime_value) : HM runtime_value :=
+    fun st =>
+      match allocate_value adts (state_memory st) t v with
+      | Some (id, memory) => Some (Ok (inl (VPointer id 0)) (state_with_memory st memory))
+      | None => Some (Unmodelled "allocate a model's temporary")
+      end.
 
 End Pointers.
 
