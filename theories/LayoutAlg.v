@@ -1,4 +1,4 @@
-From RustRocq Require Import Syntax Layout Memory Subst.
+From RustRocq Require Import Syntax Subst.
 From Stdlib Require Import Bool List String ZArith Lia.
 
 Import ListNotations.
@@ -6,6 +6,18 @@ Local Open Scope string_scope.
 Local Open Scope nat_scope.
 Open Scope list_scope.
 Notation length := List.length.
+
+Inductive primitive_layout :=
+  | PrimInt (bits : nat) (signed : bool)
+  | PrimFloat (bits : nat)
+  | PrimPointer (address_space bits : nat).
+
+Record scalar_layout := ScalarLayout {
+  scalar_primitive : primitive_layout;
+  scalar_initialized : bool;
+  scalar_valid_start : Z;
+  scalar_valid_end : Z;
+}.
 
 Inductive repr :=
   | ReprRust
@@ -21,83 +33,11 @@ Definition repr_of_name (n : name) : repr :=
 
 Definition reprs_of (ns : list name) : list repr := map repr_of_name ns.
 
-Inductive syn_type :=
-  | StInt (w : int_width) (signed : bool)
-  | StBool
-  | StChar
-  | StFloat (w : float_width)
-  | StPtr (fat : bool)
-  | StFnPtr
-  | StUnit
-  | StNever
-  | StArray (elem : syn_type) (len : nat)
-  | StTuple (fields : list syn_type)
-  | StStruct (path : name) (fields : list syn_type) (r : list repr)
-  | StEnum (path : name) (variants : list (list syn_type)) (r : list repr)
-  | StUnion (path : name) (fields : list syn_type) (r : list repr)
-  | StUnsized
-  | StOpaque.
-
 Definition find_adt (adts : list adt_def) (path : name) : option adt_def :=
   find (fun d => String.eqb (ad_path d) path) adts.
 
-Definition unsized_ty (t : ty) : bool :=
-  match t with
-  | TSlice _ | TStr | TDynamic _ _ => true
-  | _ => false
-  end.
-
 Definition variant_field_tys (args : list garg) (v : variant_def) : list ty :=
   map (fun f => subst_ty args (snd f)) (vd_fields v).
-
-Fixpoint syn_type_of_fuel (fuel : nat) (adts : list adt_def) (t : ty) : syn_type :=
-  match fuel with
-  | O => StOpaque
-  | S fuel =>
-      let go := syn_type_of_fuel fuel adts in
-      match t with
-      | TBool => StBool
-      | TChar => StChar
-      | TInt w => StInt w true
-      | TUint w => StInt w false
-      | TFloat w => StFloat w
-      | TRef _ p _ | TRawPtr p _ => StPtr (unsized_ty p)
-      | TFnPtr _ => StFnPtr
-      | TFnDef _ _ => StUnit
-      | TNever => StNever
-      | TTuple [] => StUnit
-      | TTuple ts => StTuple (map go ts)
-      | TArray e n =>
-          match const_nat n with
-          | Some k => StArray (go e) k
-          | None => StOpaque
-          end
-      | TSlice _ | TStr | TDynamic _ _ => StUnsized
-      | TClosure _ args =>
-          match closure_upvars args with
-          | Some u => go u
-          | None => StOpaque
-          end
-      | TPat base _ => go base
-      | TAdt path args =>
-          match find_adt adts path with
-          | Some d =>
-              let r := reprs_of (ad_repr d) in
-              match ad_kind d, ad_variants d with
-              | AkStruct, [v] => StStruct path (map go (variant_field_tys args v)) r
-              | AkUnion, [v] => StUnion path (map go (variant_field_tys args v)) r
-              | AkEnum, vs =>
-                  StEnum path (map (fun v => map go (variant_field_tys args v)) vs) r
-              | _, _ => StOpaque
-              end
-          | None => StOpaque
-          end
-      | _ => StOpaque
-      end
-  end.
-
-Definition syn_type_of (adts : list adt_def) (t : ty) : syn_type :=
-  syn_type_of_fuel 64 adts t.
 
 Definition size_align := (nat * nat)%type.
 
@@ -195,231 +135,6 @@ Class LayoutAlg := {
     /\ aligned (en_align l) (en_size l)
     /\ (Z.of_nat (en_size l) <= max_isize)%Z;
 }.
-
-Inductive layout_tree :=
-  | LtPrim (size align : nat)
-  | LtArray (elem : layout_tree) (len : nat)
-  | LtAgg (l : agg_layout) (fields : list layout_tree)
-  | LtEnum (l : enum_layout) (variants : list (list layout_tree)).
-
-Fixpoint lt_size (lt : layout_tree) : nat :=
-  match lt with
-  | LtPrim s _ => s
-  | LtArray e n => n * lt_size e
-  | LtAgg l _ => ag_size l
-  | LtEnum l _ => en_size l
-  end.
-
-Fixpoint lt_align (lt : layout_tree) : nat :=
-  match lt with
-  | LtPrim _ a => a
-  | LtArray e _ => lt_align e
-  | LtAgg l _ => ag_align l
-  | LtEnum l _ => en_align l
-  end.
-
-Definition sa_of (lt : layout_tree) : size_align := (lt_size lt, lt_align lt).
-
-Fixpoint all_some {A} (xs : list (option A)) : option (list A) :=
-  match xs with
-  | [] => Some []
-  | None :: _ => None
-  | Some x :: rest => match all_some rest with
-                      | Some ys => Some (x :: ys)
-                      | None => None
-                      end
-  end.
-
-Section UseLayoutAlg.
-  Context {A : LayoutAlg}.
-
-  Fixpoint use_layout_alg (st : syn_type) : option layout_tree :=
-    match st with
-    | StInt w _ => Some (LtPrim (int_width_bytes w) (int_width_bytes w))
-    | StBool => Some (LtPrim 1 1)
-    | StChar => Some (LtPrim 4 4)
-    | StFloat w =>
-        Some (LtPrim (Nat.div (float_width_bits w) 8) (Nat.div (float_width_bits w) 8))
-    | StPtr fat =>
-        Some (LtPrim (if fat then 2 * pointer_bytes else pointer_bytes) pointer_bytes)
-    | StFnPtr => Some (LtPrim pointer_bytes pointer_bytes)
-    | StUnit | StNever => Some (LtPrim 0 1)
-    | StArray e n =>
-        match use_layout_alg e with
-        | Some lt => Some (LtArray lt n)
-        | None => None
-        end
-    | StTuple fs =>
-        match all_some (map use_layout_alg fs) with
-        | Some lts =>
-            match struct_alg "" (map sa_of lts) [] with
-            | Some l => Some (LtAgg l lts)
-            | None => None
-            end
-        | None => None
-        end
-    | StStruct path fs r =>
-        match all_some (map use_layout_alg fs) with
-        | Some lts =>
-            match struct_alg path (map sa_of lts) r with
-            | Some l => Some (LtAgg l lts)
-            | None => None
-            end
-        | None => None
-        end
-    | StUnion path fs r =>
-        match all_some (map use_layout_alg fs) with
-        | Some lts =>
-            match union_alg path (map sa_of lts) r with
-            | Some l => Some (LtAgg l lts)
-            | None => None
-            end
-        | None => None
-        end
-    | StEnum path vs r =>
-        match all_some (map (fun fs => all_some (map use_layout_alg fs)) vs) with
-        | Some vlts =>
-            match enum_alg path (map (map sa_of) vlts) r with
-            | Some l => Some (LtEnum l vlts)
-            | None => None
-            end
-        | None => None
-        end
-    | StUnsized | StOpaque => None
-    end.
-End UseLayoutAlg.
-
-Definition variant_of (idx : nat) (tys : list ty) (v : agg_layout) : variant_layout :=
-  VariantLayoutWithFields idx (ag_size v) false tys (ag_offsets v) (AbiMemory true).
-
-Definition tag_ty (s : scalar_layout) : ty :=
-  match scalar_primitive s with
-  | PrimInt 8 false => TUint W8
-  | PrimInt 16 false => TUint W16
-  | PrimInt 32 false => TUint W32
-  | PrimInt 64 false => TUint W64
-  | PrimInt 8 true => TInt W8
-  | PrimInt 16 true => TInt W16
-  | PrimInt 32 true => TInt W32
-  | PrimInt 64 true => TInt W64
-  | _ => TUint WSize
-  end.
-
-Definition adt_field_tys (adts : list adt_def) (t : ty) : option (list ty) :=
-  match t with
-  | TTuple ts => Some ts
-  | TAdt path args =>
-      match find_adt adts path with
-      | Some d =>
-          match ad_variants d with
-          | [v] => Some (variant_field_tys args v)
-          | _ => Some []
-          end
-      | None => None
-      end
-  | _ => Some []
-  end.
-
-Definition adt_kind_of (adts : list adt_def) (t : ty) : option adt_kind :=
-  match t with
-  | TAdt path _ =>
-      match find_adt adts path with
-      | Some d => Some (ad_kind d)
-      | None => None
-      end
-  | _ => None
-  end.
-
-Definition type_layout_of_tree (adts : list adt_def) (t : ty) (lt : layout_tree)
-    : option type_layout :=
-  match lt with
-  | LtPrim s a =>
-      Some (TypeLayoutWithFields "alg" t s a false [] FieldsPrimitive
-              (VariantsSingle 0) (AbiMemory true))
-  | LtArray e n =>
-      Some (TypeLayoutWithFields "alg" t (lt_size lt) (lt_align lt) false []
-              (FieldsArray (lt_size e) n) (VariantsSingle 0) (AbiMemory true))
-  | LtAgg l _ =>
-      match adt_field_tys adts t with
-      | Some tys =>
-          let fl := match adt_kind_of adts t with
-                    | Some AkUnion => FieldsUnion (length tys)
-                    | _ => FieldsArbitrary (ag_offsets l)
-                    end in
-          Some (TypeLayoutWithFields "alg" t (ag_size l) (ag_align l) false tys fl
-                  (VariantsSingle 0) (AbiMemory true))
-      | None => None
-      end
-  | LtEnum l _ =>
-      match t with
-      | TAdt path args =>
-          match find_adt adts path with
-          | Some d =>
-              let variants :=
-                map (fun (p : variant_def * agg_layout) =>
-                       variant_of (vd_index (fst p)) (variant_field_tys args (fst p)) (snd p))
-                    (combine (ad_variants d) (en_variants l)) in
-              Some (TypeLayoutWithFields "alg" t (en_size l) (en_align l) false
-                      [tag_ty (en_tag l)] (FieldsArbitrary [en_tag_offset l])
-                      (VariantsMultiple (en_tag l) 0 TagDirect variants)
-                      (AbiMemory true))
-          | None => None
-          end
-      | _ => None
-      end
-  end.
-
-Definition type_layout_of {A : LayoutAlg} (adts : list adt_def) (t : ty)
-    : option type_layout :=
-  match use_layout_alg (syn_type_of adts t) with
-  | Some lt => type_layout_of_tree adts t lt
-  | None => None
-  end.
-
-Fixpoint reachable_tys_fuel (fuel : nat) (adts : list adt_def) (t : ty) : list ty :=
-  match fuel with
-  | O => []
-  | S fuel =>
-      let go := reachable_tys_fuel fuel adts in
-      match t with
-      | TClosure _ args =>
-          match closure_upvars args with
-          | Some u => go u
-          | None => []
-          end
-      | _ =>
-          t :: match t with
-               | TTuple ts => List.concat (map go ts)
-               | TArray e _ | TSlice e => go e
-               | TRef _ p _ | TRawPtr p _ => go p
-               | TPat base _ => go base
-               | TAdt path args =>
-                   match find_adt adts path with
-                   | Some d =>
-                       List.concat (map (fun v => List.concat (map go (variant_field_tys args v)))
-                                   (ad_variants d))
-                   | None => []
-                   end
-               | _ => []
-               end
-      end
-  end.
-
-Fixpoint dedup_tys (acc : list ty) (ts : list ty) : list ty :=
-  match ts with
-  | [] => rev acc
-  | t :: rest =>
-      if existsb (ty_eqb t) acc then dedup_tys acc rest else dedup_tys (t :: acc) rest
-  end.
-
-Definition layout_env_of {A : LayoutAlg} (adts : list adt_def) (ts : list ty)
-    : layout_env :=
-  let all := dedup_tys [] (List.concat (map (reachable_tys_fuel 8 adts) ts)) in
-  fold_right (fun t acc => match type_layout_of adts t with
-                           | Some l => l :: acc
-                           | None => acc
-                           end)
-             [] all.
 
 Definition align_to (off a : nat) : nat := Nat.div (off + a - 1) a * a.
 

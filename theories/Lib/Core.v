@@ -1,5 +1,5 @@
-From RustRocq Require Import Syntax Layout Memory Denote Lib.Models.
-From Stdlib Require Import String List ZArith.
+From RustRocq Require Import Syntax LayoutAlg Memory Denote Lib.Models.
+From Stdlib Require Import Bool String List ZArith.
 Import ListNotations.
 
 Local Open Scope string_scope.
@@ -18,7 +18,11 @@ Definition is_option (t : ty) : bool :=
   | _ => false
   end.
 
-Definition core_model (overflow_checks : bool) : partial_model := fun env f targs vs =>
+Section Core.
+
+Context `{Alg : LayoutAlg}.
+
+Definition core_model (overflow_checks : bool) : partial_model := fun adts f targs vs =>
   if String.eqb f "core::option::Option::<T>::unwrap" then
     Some match vs with
          | [VAdt p 1 [v]] => if String.eqb p option_path then returned v
@@ -47,8 +51,8 @@ Definition core_model (overflow_checks : bool) : partial_model := fun env f targ
   else if String.eqb f "core::ops::Sub::sub" then
     match targs, vs with
     | [GTy (TRef _ (TUint WSize) _); GTy (TRef _ (TUint WSize) _)], [x; y] =>
-        Some (a <- read_arg env x ;;
-              b <- read_arg env y ;;
+        Some (a <- read_arg adts (TUint WSize) x ;;
+              b <- read_arg adts (TUint WSize) y ;;
               match a, b with
               | VBits _ za, VBits _ zb =>
                   if overflow_checks && Z.ltb za zb then panics
@@ -58,3 +62,5 @@ Definition core_model (overflow_checks : bool) : partial_model := fun env f targ
     | _, _ => None
     end
   else None.
+
+End Core.

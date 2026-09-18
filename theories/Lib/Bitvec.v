@@ -1,5 +1,5 @@
-From RustRocq Require Import Syntax Layout Memory Denote Lib.Models Lib.Core.
-From Stdlib Require Import String List ZArith Lia.
+From RustRocq Require Import Syntax LayoutAlg Memory Denote Lib.Models Lib.Core.
+From Stdlib Require Import Bool String List ZArith Lia.
 Import ListNotations.
 
 Local Open Scope string_scope.
@@ -10,7 +10,7 @@ Definition bit_array_path : name := "bitvec::array::BitArray".
 Definition range_path : name := "core::ops::Range".
 
 Definition bit_array_value (ws : list Z) : runtime_value :=
-  VAdt bit_array_path 0 [phantom; VArray (ShapeBits W64) (map (VBits W64) ws)].
+  VAdt bit_array_path 0 [phantom; VArray (map (VBits W64) ws)].
 
 Fixpoint words_of_values (vs : list runtime_value) : option (list Z) :=
   match vs with
@@ -21,7 +21,7 @@ Fixpoint words_of_values (vs : list runtime_value) : option (list Z) :=
 
 Definition words_of (v : runtime_value) : option (list Z) :=
   match v with
-  | VAdt p 0 [_; VArray _ elems] =>
+  | VAdt p 0 [_; VArray elems] =>
       if String.eqb p bit_array_path then words_of_values elems else None
   | _ => None
   end.
@@ -58,9 +58,8 @@ Definition all_bits (ws : list Z) (head len : nat) : bool :=
 
 Definition bit_slice (prov : pointer_provenance) (word_off : Z) (head len : nat)
     : runtime_value :=
-  VPointerValue (ShapeSlice ShapeUnit)
-    (PointerValue prov (word_off + 8 * Z.of_nat (head / 64))%Z
-       (PointerLength (head mod 64 + 64 * len))).
+  VPtr (PointerValue prov (word_off + 8 * Z.of_nat (head / 64))%Z
+          (PointerLength (head mod 64 + 64 * len))).
 
 Record slice_view := SliceView {
   sv_prov : pointer_provenance;
@@ -71,7 +70,7 @@ Record slice_view := SliceView {
 
 Definition view_of (v : runtime_value) : option slice_view :=
   match v with
-  | VPointerValue _ (PointerValue prov off (PointerLength m)) =>
+  | VPtr (PointerValue prov off (PointerLength m)) =>
       Some (SliceView prov off (m mod 64) (m / 64))
   | _ => None
   end.
@@ -84,40 +83,6 @@ Definition view_value (s : slice_view) : runtime_value :=
 Definition sub_view (s : slice_view) (start stop : nat) : slice_view :=
   let h := sv_head s + start in
   SliceView (sv_prov s) (sv_off s + 8 * Z.of_nat (h / 64))%Z (h mod 64) (stop - start).
-
-Definition read_view (env : layout_env) (s : slice_view) : M (list Z) :=
-  fun st =>
-    match read_through_pointer_result env (ShapeArray (ShapeBits W64) (view_words s))
-            (PointerValue (sv_prov s) (sv_off s) PointerThin) st with
-    | AccessOk (VArray _ vs) =>
-        match words_of_values vs with
-        | Some ws => Ok ws st
-        | None => Unmodelled "bit-slice words that are not u64"
-        end
-    | AccessOk _ => Unmodelled "bit-slice words that are not an array"
-    | AccessUb r => Ub r
-    | AccessFail => Unmodelled "read a bit-slice"
-    end.
-
-Definition write_view (env : layout_env) (s : slice_view) (ws : list Z) : M unit :=
-  fun st =>
-    match write_through_pointer_result env (ShapeArray (ShapeBits W64) (view_words s))
-            (PointerValue (sv_prov s) (sv_off s) PointerThin)
-            (VArray (ShapeBits W64) (map (VBits W64) ws)) st with
-    | AccessOk st' => Ok tt st'
-    | AccessUb r => Ub r
-    | AccessFail => Unmodelled "write a bit-slice"
-    end.
-
-Definition view_of_array (env : layout_env) (t : ty) (p : runtime_value) : option slice_view :=
-  match p, array_words t, find_type_layout env t with
-  | VPointerValue _ (PointerValue prov off _), Some n, Some l =>
-      match layout_field_offset l 1 with
-      | Some data => Some (SliceView prov (off + Z.of_nat data)%Z 0 (64 * n))
-      | None => None
-      end
-  | _, _, _ => None
-  end.
 
 Definition range_of (v : runtime_value) : option (nat * nat) :=
   match v with
@@ -143,18 +108,53 @@ Definition is_bit_slice_fn (f suffix : name) : bool :=
   || String.eqb f (String.append "bitvec::slice::api::<impl bitvec::slice::BitSlice<T, O>>::"
                      suffix).
 
-Section Models.
+Definition words_ty (n : nat) : ty := TArray (TUint W64) (CValue (TUint WSize) (Z.of_nat n)).
 
-Context `{Addr : AddrAlg}.
+Definition view_words_pointer (s : slice_view) : pointer_value :=
+  PointerValue (sv_prov s) (sv_off s) PointerThin.
 
-Definition static_bool (env : layout_env) (b : bool) : M result :=
+Section Views.
+
+Context `{Alg : LayoutAlg} (adts : list adt_def).
+
+Definition read_view (s : slice_view) : M (list Z) :=
+  v <- observe "read a bit-slice" (fun st =>
+         read_pointer adts (state_memory st) (words_ty (view_words s)) (view_words_pointer s)) ;;
+  match v with
+  | VArray vs => of_option "bit-slice words that are not u64" (words_of_values vs)
+  | _ => fail "bit-slice words that are not an array"
+  end.
+
+Definition write_view (s : slice_view) (ws : list Z) : M unit :=
+  change "write a bit-slice" (fun st =>
+    m <-? write_pointer adts (state_memory st) (words_ty (view_words s)) (view_words_pointer s)
+            (VArray (map (VBits W64) ws)) ;;
+    AccessOk (state_with_memory st m)).
+
+Definition view_of_array (t : ty) (p : runtime_value) : option slice_view :=
+  match p, array_words t, layout_of adts t with
+  | VPtr (PointerValue prov off _), Some n, Some l =>
+      match field_offset l None 1 with
+      | Some data => Some (SliceView prov (off + Z.of_nat data)%Z 0 (64 * n))
+      | None => None
+      end
+  | _, _, _ => None
+  end.
+
+Definition static_bool (b : bool) : M result :=
   fun st =>
-    match allocate_typed_value_with_layouts env (state_memory st) ShapeBool (VBool b) with
-    | Some (id, memory) => Ok (Returned (VPointer ShapeBool id 0)) (state_with_memory st memory)
+    match allocate_value adts (state_memory st) TBool (VBool b) with
+    | Some (id, memory) => Ok (Returned (VPointer id 0)) (state_with_memory st memory)
     | None => Unmodelled "allocate the static bool of a bit index"
     end.
 
-Definition bitvec_model : partial_model := fun env f targs vs =>
+End Views.
+
+Section Models.
+
+Context `{Alg : LayoutAlg}.
+
+Definition bitvec_model : partial_model := fun adts f targs vs =>
   if String.eqb f "bitvec::array::BitArray::<A, O>::ZERO" then
     match targs with
     | [GTy (TArray (TUint W64) (CValue _ n)); GTy _] =>
@@ -194,7 +194,7 @@ Definition bitvec_model : partial_model := fun env f targs vs =>
     | [GTy t], [p] =>
         match array_words t with
         | Some _ =>
-            Some match view_of_array env t p with
+            Some match view_of_array adts t p with
                  | Some s => returned (view_value s)
                  | None => fail "BitArray::deref without a layout for the array"
                  end
@@ -208,11 +208,11 @@ Definition bitvec_model : partial_model := fun env f targs vs =>
     | [GTy t; GTy (TUint WSize)], [p; VBits _ i] =>
         match array_words t with
         | Some _ =>
-            Some match view_of_array env t p with
+            Some match view_of_array adts t p with
                  | Some s =>
                      if Nat.leb (sv_len s) (Z.to_nat i) then panics
-                     else ws <- read_view env s ;;
-                          static_bool env (bit_of ws (sv_head s + Z.to_nat i))
+                     else ws <- read_view adts s ;;
+                          static_bool adts (bit_of ws (sv_head s + Z.to_nat i))
                  | None => fail "BitArray::index without a layout for the array"
                  end
         | None => None
@@ -220,7 +220,7 @@ Definition bitvec_model : partial_model := fun env f targs vs =>
     | [GTy t; GTy _], [p; r] =>
         match array_words t, range_of r with
         | Some _, Some (start, stop) =>
-            Some match view_of_array env t p with
+            Some match view_of_array adts t p with
                  | Some s =>
                      if Nat.leb start stop && Nat.leb stop (sv_len s)
                      then returned (view_value (sub_view s start stop))
@@ -247,8 +247,8 @@ Definition bitvec_model : partial_model := fun env f targs vs =>
     Some match vs with
          | [x; VBool b] =>
              with_view vs (fun s =>
-               ws <- read_view env s ;;
-               write_view env s (fill_bits ws (sv_head s) (sv_len s) b) ;;;
+               ws <- read_view adts s ;;
+               write_view adts s (fill_bits ws (sv_head s) (sv_len s) b) ;;;
                returned VUnit)
          | _ => fail "BitSlice::fill with unexpected arguments"
          end
@@ -257,29 +257,29 @@ Definition bitvec_model : partial_model := fun env f targs vs =>
          | [x; VBits _ i; VBool b] =>
              with_view vs (fun s =>
                if Nat.leb (sv_len s) (Z.to_nat i) then panics
-               else ws <- read_view env s ;;
-                    write_view env s (with_bit ws (sv_head s + Z.to_nat i) b) ;;;
+               else ws <- read_view adts s ;;
+                    write_view adts s (with_bit ws (sv_head s + Z.to_nat i) b) ;;;
                     returned VUnit)
          | _ => fail "BitSlice::set with unexpected arguments"
          end
   else if is_bit_slice_fn f "first_one" then
     Some (with_view vs (fun s =>
-      ws <- read_view env s ;;
+      ws <- read_view adts s ;;
       match first_one_bits ws (sv_head s) (sv_len s) with
       | Some i => returned (some_value (VBits WSize (Z.of_nat i)))
       | None => returned none_value
       end))
   else if is_bit_slice_fn f "count_ones" then
     Some (with_view vs (fun s =>
-      ws <- read_view env s ;;
+      ws <- read_view adts s ;;
       returned (VBits WSize (Z.of_nat (count_ones_bits ws (sv_head s) (sv_len s))))))
   else if is_bit_slice_fn f "all" then
     Some (with_view vs (fun s =>
-      ws <- read_view env s ;;
+      ws <- read_view adts s ;;
       returned (VBool (all_bits ws (sv_head s) (sv_len s)))))
   else if is_bit_slice_fn f "not_all" then
     Some (with_view vs (fun s =>
-      ws <- read_view env s ;;
+      ws <- read_view adts s ;;
       returned (VBool (negb (all_bits ws (sv_head s) (sv_len s))))))
   else None.
 

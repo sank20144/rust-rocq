@@ -1,9 +1,11 @@
-From RustRocq Require Import Syntax Layout Memory Subst Denote.
+From RustRocq Require Import Syntax Memory Subst Denote.
 From Generated Require Import generics.
 From Stdlib Require Import String List ZArith.
 Import ListNotations.
 
 Local Open Scope string_scope.
+
+Definition P : program := only_adts [].
 
 Definition id_u32 : body := subst_body [GTy (TUint W32)] id.
 
@@ -42,18 +44,18 @@ Example bounds_are_instantiated_too :
 Proof. reflexivity. Qed.
 
 Example a_generic_body_will_not_run_uninstantiated :
-  Means id [VBits W32 7]
+  Means P id [] [VBits W32 7]
     (AMismatch "argument does not match the declared type").
-Proof. apply (means_within 20%nat). vm_compute. reflexivity. Qed.
+Proof. apply (means_within P 20%nat). vm_compute. reflexivity. Qed.
 
 Example instantiating_makes_it_run :
-  MeansAt id [GTy (TUint W32)] [VBits W32 7] (ARet (VBits W32 7)).
-Proof. apply (means_within 20%nat). vm_compute. reflexivity. Qed.
+  Means P (subst_body [GTy (TUint W32)] id) [] [VBits W32 7] (ARet (VBits W32 7)).
+Proof. apply (means_within P 20%nat). vm_compute. reflexivity. Qed.
 
 Example instantiated_at_u32_still_refuses_a_bool :
-  MeansAt id [GTy (TUint W32)] [VBool true]
+  Means P (subst_body [GTy (TUint W32)] id) [] [VBool true]
     (AMismatch "argument does not match the declared type").
-Proof. apply (means_within 20%nat). vm_compute. reflexivity. Qed.
+Proof. apply (means_within P 20%nat). vm_compute. reflexivity. Qed.
 
 Example substituting_nothing_changes_nothing : subst_body [] id = id.
 Proof. reflexivity. Qed.

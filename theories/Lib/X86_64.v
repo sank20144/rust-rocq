@@ -1,5 +1,5 @@
-From RustRocq Require Import Syntax Layout Memory Denote Lib.Models.
-From Stdlib Require Import String List ZArith.
+From RustRocq Require Import Syntax LayoutAlg Memory Denote Lib.Models.
+From Stdlib Require Import Bool String List ZArith.
 Import ListNotations.
 
 Local Open Scope string_scope.
@@ -55,16 +55,20 @@ Definition frame_add (size start n : Z) : M result :=
     else if phys_addr_limit <=? a then panics
     else returned (phys_frame (a - a mod size)).
 
-Definition compare_frames (env : layout_env) (k : Z -> Z -> bool) (x y : runtime_value)
-    : M result :=
-  fx <- read_arg env x ;;
-  fy <- read_arg env y ;;
+Section X86_64.
+
+Context `{Alg : LayoutAlg}.
+
+Definition compare_frames (adts : list adt_def) (frame : ty) (k : Z -> Z -> bool)
+    (x y : runtime_value) : M result :=
+  fx <- read_arg adts frame x ;;
+  fy <- read_arg adts frame y ;;
   match frame_start fx, frame_start fy with
   | Some a, Some b => returned (VBool (k a b))
   | _, _ => fail "a frame comparison on values that are not frames"
   end.
 
-Definition x86_64_model : partial_model := fun env f targs vs =>
+Definition x86_64_model : partial_model := fun adts f targs vs =>
   if String.eqb f "x86_64::structures::paging::PageSize::SIZE" then
     Some match targs, vs with
          | [GTy s], [] =>
@@ -118,7 +122,7 @@ Definition x86_64_model : partial_model := fun env f targs vs =>
     match targs, vs with
     | [GTy t; GTy _], [x; y] =>
         match is_frame_of t with
-        | Some _ => Some (compare_frames env Z.ltb x y)
+        | Some _ => Some (compare_frames adts t Z.ltb x y)
         | None => None
         end
     | _, _ => None
@@ -127,9 +131,11 @@ Definition x86_64_model : partial_model := fun env f targs vs =>
     match targs, vs with
     | [GTy t; GTy _], [x; y] =>
         match is_frame_of t with
-        | Some _ => Some (compare_frames env (fun a b => Z.ltb b a) x y)
+        | Some _ => Some (compare_frames adts t (fun a b => Z.ltb b a) x y)
         | None => None
         end
     | _, _ => None
     end
   else None.
+
+End X86_64.

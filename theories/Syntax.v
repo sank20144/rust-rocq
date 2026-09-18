@@ -504,3 +504,9 @@ Definition closure_upvars (args : list garg) : option ty :=
   | GTy u :: _ => Some u
   | _ => None
   end.
+
+Definition closure_inputs (args : list garg) : list ty :=
+  match rev args with
+  | _ :: GTy (TFnPtr (FnSig (TTuple inputs :: nil) _ _ _ _)) :: _ => inputs
+  | _ => nil
+  end.

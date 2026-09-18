@@ -1,34 +1,26 @@
-From RustRocq Require Import Syntax Layout Memory Denote.
+From RustRocq Require Import Syntax LayoutAlg Memory Denote.
 From Stdlib Require Import String List ZArith.
 Import ListNotations.
 
 Local Open Scope string_scope.
 
 Definition partial_model : Type :=
-  layout_env -> name -> list garg -> list runtime_value -> option (M result).
+  list adt_def -> name -> list garg -> list runtime_value -> option (M result).
 
 Fixpoint models (ms : list partial_model) : model :=
-  fun env f targs vs =>
+  fun adts f targs vs =>
     match ms with
-    | [] => no_model env f targs vs
+    | [] => no_model adts f targs vs
     | m :: rest =>
-        match m env f targs vs with
+        match m adts f targs vs with
         | Some r => r
-        | None => models rest env f targs vs
+        | None => models rest adts f targs vs
         end
     end.
 
 Definition returned (v : runtime_value) : M result := ret (Returned v).
 
 Definition panics : M result := ret Panicked.
-
-Definition read_arg (env : layout_env) (v : runtime_value) : M runtime_value :=
-  match v with
-  | VPointerValue shape p =>
-      fun st => of_access "read through a model's argument"
-                  (read_through_pointer_result env shape p st) st
-  | _ => fail "a model expected a pointer argument"
-  end.
 
 Definition phantom : runtime_value := VAdt "core::marker::PhantomData" 0 [].
 
@@ -91,9 +83,6 @@ Definition hmono {A} (m : call_back -> HM A) : Prop :=
 Lemma hret_mono {A} (a : A) : hmono (fun _ => hret a).
 Proof. intros c1 c2 _ st o H. exact H. Qed.
 
-Lemma hlift_mono {A} (m : M A) : hmono (fun _ => hlift m).
-Proof. intros c1 c2 _ st o H. exact H. Qed.
-
 Lemma hfail_mono {A} (w : string) : hmono (fun _ => @hfail A w).
 Proof. intros c1 c2 _ st o H. exact H. Qed.
 
@@ -126,30 +115,42 @@ Proof.
   rewrite (Hm c1 c2 Hle st o1 E). exact H.
 Qed.
 
+Section Pointers.
+
+Context `{Alg : LayoutAlg} (adts : list adt_def).
+
+Definition read_arg (t : ty) (v : runtime_value) : M runtime_value :=
+  match v with
+  | VPtr p =>
+      observe "read through a model's argument" (fun st => read_pointer adts (state_memory st) t p)
+  | _ => fail "a model expected a pointer argument"
+  end.
+
+Definition write_arg (t : ty) (p v : runtime_value) : M unit :=
+  match p with
+  | VPtr ptr =>
+      change "write through a model's argument" (fun st =>
+        m <-? write_pointer adts (state_memory st) t ptr v ;;
+        AccessOk (state_with_memory st m))
+  | _ => fail "a model expected a pointer argument"
+  end.
+
+Definition alloc_temp (t : ty) (v : runtime_value) : HM runtime_value :=
+  fun st =>
+    match allocate_value adts (state_memory st) t v with
+    | Some (id, memory) => Some (Ok (inl (VPointer id 0)) (state_with_memory st memory))
+    | None => Some (Unmodelled "allocate a model's temporary")
+    end.
+
+End Pointers.
+
 Definition free_temp (p : runtime_value) : HM unit :=
   fun st =>
     match p with
-    | VPointerValue _ (PointerValue (ProvenanceAllocation id) _ _) =>
+    | VPtr (PointerValue (ProvenanceAllocation id) _ _) =>
         match kill_allocation (state_memory st) id with
         | Some memory => Some (Ok (inl tt) (state_with_memory st memory))
         | None => Some (Unmodelled "free a model's temporary")
         end
     | _ => Some (Unmodelled "free a model's temporary")
     end.
-
-Definition read_temp (env : layout_env) (p : runtime_value) : HM runtime_value :=
-  hlift (read_arg env p).
-
-Section Temporaries.
-
-Context `{Addr : AddrAlg}.
-
-Definition alloc_temp (env : layout_env) (shape : value_shape) (v : runtime_value)
-    : HM runtime_value :=
-  fun st =>
-    match allocate_typed_value_with_layouts env (state_memory st) shape v with
-    | Some (id, memory) => Some (Ok (inl (VPointer shape id 0)) (state_with_memory st memory))
-    | None => Some (Unmodelled "allocate a model's temporary")
-    end.
-
-End Temporaries.
