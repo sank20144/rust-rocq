@@ -573,7 +573,7 @@ Section LayoutOfTypes.
     | TSlice e, PointerLength n =>
         option_map (fun l => (n * size_of l, align_of l)) (layout_of e)
     | TStr, PointerLength n => Some (n, 1)
-    | TDynamic _ _, PointerVTable _ => Some (0, 1)
+    | TDynamic _ _, PointerVTable concrete => option_map size_align_of (layout_of concrete)
     | TSlice _, _ | TStr, _ | TDynamic _ _, _ => None
     | _, PointerThin => option_map size_align_of (layout_of t)
     | _, _ => None

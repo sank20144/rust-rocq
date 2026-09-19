@@ -124,7 +124,7 @@ Section Programs.
 
 End Programs.
 
-Section Arithmetic.
+Section Operators.
 
   Definition bits_of (t : ty) : option (int_width * bool) :=
     match t with
@@ -282,7 +282,22 @@ Section Arithmetic.
     | None => fail "integer cast to a type that is not an integer"
     end.
 
-End Arithmetic.
+  Definition is_trait_object_pointer (t : ty) : bool :=
+    match t with
+    | TRef _ (TDynamic _ _) _ | TRawPtr (TDynamic _ _) _ => true
+    | _ => false
+    end.
+
+  Definition denote_unsize (src dst : ty) (v : runtime_value) : M runtime_value :=
+    match v, src with
+    | VPtr (PointerValue provenance address PointerThin), (TRef _ pointee _ | TRawPtr pointee _) =>
+        if is_trait_object_pointer dst
+        then ret (VPtr (PointerValue provenance address (PointerVTable pointee)))
+        else fail "unsizing cast other than to a trait object"
+    | _, _ => fail "unsizing cast of a value that is not a thin pointer"
+    end.
+
+End Operators.
 
 Section Typing.
 
@@ -431,6 +446,8 @@ Section Expressions.
         denote_binop dst (operand_ty b x) op vx vy
     | RUnaryOp op o => v <- denote_operand o ;; denote_unop dst op v
     | RCast CkIntToInt o t => v <- denote_operand o ;; denote_cast (operand_ty b o) t v
+    | RCast (CkPointerCoercion PcUnsize _) o t =>
+        v <- denote_operand o ;; denote_unsize (operand_ty b o) t v
     | RRef _ _ p | RRawPtr _ p => address_of p
     | RAggregate AgTuple fs => vs <- denote_operands fs ;; ret (VTuple vs)
     | RAggregate (AgAdt path v _ None) fs => vs <- denote_operands fs ;; ret (VAdt path v vs)

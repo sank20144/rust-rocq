@@ -23,6 +23,8 @@ Definition argument_value (p : pointer_value) : runtime_value :=
 
 Definition dangling (align : Z) : pointer_value := PointerValue ProvenanceNone align PointerThin.
 
+Definition formatted : runtime_value := VAdt "core::result::Result" 0 [VUnit].
+
 Definition fmt_model : partial_model := fun _ f targs vs =>
   if String.eqb f "core::fmt::rt::Argument::<'_/#0>::new_debug" then
     Some match vs with
@@ -42,6 +44,11 @@ Definition fmt_model : partial_model := fun _ f targs vs =>
              returned (VAdt arguments_path 0
                          [non_null text; non_null (dangling 8)])
          | _ => fail "Arguments::from_str with unexpected arguments"
+         end
+  else if String.eqb f "core::fmt::Formatter::<'a/#0>::debug_struct_field3_finish" then
+    Some match vs with
+         | [_; _; _; _; _; _; _; _] => returned formatted
+         | _ => fail "Formatter::debug_struct_field3_finish with unexpected arguments"
          end
   else if String.eqb f "core::panicking::panic_fmt" then
     Some panics

@@ -221,3 +221,20 @@ Proof. apply (means_within P 100). vm_compute. reflexivity. Qed.
 Example valid_outside_range_lo :
   Means P mark_valid high_range [self; frames 0 0; VBool true] APanic.
 Proof. apply (means_within P 100). vm_compute. reflexivity. Qed.
+
+Definition debug_fmt :=
+  inst_body bitmap_frame_allocator_BitmapAllocator_S_N_1_as_core_fmt_Debug_fmt.
+
+Definition formatter_ty : ty := TAdt "core::fmt::Formatter" [GLifetime RErased].
+
+Definition with_formatter (mem : memory_state) : memory_state :=
+  match allocate_uninit adts mem formatter_ty with
+  | Some (_, m) => m
+  | None => []
+  end.
+
+Definition formatter_in (mem : memory_state) : runtime_value := VPointer (length mem) 0.
+
+Example debug_formats_the_allocator :
+  Means P debug_fmt (with_formatter one_valid) [self; formatter_in one_valid] (ARet formatted).
+Proof. apply (means_within P 100). vm_compute. reflexivity. Qed.
