@@ -134,6 +134,14 @@ Class LayoutAlg := {
     1 <= en_align l
     /\ aligned (en_align l) (en_size l)
     /\ (Z.of_nat (en_size l) <= max_isize)%Z;
+
+  struct_alg_aligns : forall n fs r l,
+    struct_alg n fs r = Some l -> Forall (fun f => Nat.divide (snd f) (ag_align l)) fs;
+  enum_alg_aligns : forall n vs r l,
+    enum_alg n vs r = Some l -> Forall (Forall (fun f => Nat.divide (snd f) (en_align l))) vs;
+  enum_alg_tag_room : forall n vs r l,
+    enum_alg n vs r = Some l ->
+    (Z.of_nat (length vs) <= 2 ^ (8 * Z.of_nat (scalar_bytes (en_tag l))))%Z;
 }.
 
 Definition align_to (off a : nat) : nat := Nat.div (off + a - 1) a * a.
@@ -178,16 +186,28 @@ Fixpoint c_end (at_ : nat) (fs : list size_align) : nat :=
   end.
 
 Definition c_align (fs : list size_align) : nat :=
-  fold_right (fun f acc => Nat.max (snd f) acc) 1 fs.
+  fold_right (fun f acc => Nat.lcm (snd f) acc) 1 fs.
 
 Definition max_size (fs : list size_align) : nat :=
   fold_right (fun f acc => Nat.max (fst f) acc) 0 fs.
 
-Lemma c_align_pos : forall fs, 1 <= c_align fs.
-Proof. induction fs as [|f fs IH]; simpl; lia. Qed.
+Lemma c_align_nz : forall fs, aligns_pos fs -> c_align fs <> 0.
+Proof.
+  induction fs as [|f fs IH]; intros Ha; simpl; [lia|].
+  inversion Ha as [|? ? Hf Hrest]; subst.
+  intros E. apply Nat.lcm_eq_0 in E. destruct E as [E|E]; [exact (Hf E) | exact (IH Hrest E)].
+Qed.
 
-Lemma c_align_nz : forall fs, c_align fs <> 0.
-Proof. intros fs. pose proof (c_align_pos fs). lia. Qed.
+Lemma c_align_pos : forall fs, aligns_pos fs -> 1 <= c_align fs.
+Proof. intros fs Ha. pose proof (c_align_nz fs Ha). lia. Qed.
+
+Lemma c_align_divides : forall fs, Forall (fun f => Nat.divide (snd f) (c_align fs)) fs.
+Proof.
+  induction fs as [|f fs IH]; simpl; constructor.
+  - apply Nat.divide_lcm_l.
+  - eapply Forall_impl; [|exact IH].
+    intros g Hg. eapply Nat.divide_trans; [exact Hg | apply Nat.divide_lcm_r].
+Qed.
 
 Lemma c_offsets_length : forall fs at_, length (c_offsets at_ fs) = length fs.
 Proof. induction fs as [|f fs IH]; intros; simpl; auto. Qed.
@@ -298,7 +318,7 @@ Definition c_variant (fs : list size_align) : agg_layout :=
   AggLayout (c_end tag_bytes fs) (c_align fs) (c_offsets tag_bytes fs).
 
 Definition enum_align (vs : list agg_layout) : nat :=
-  fold_right (fun v acc => Nat.max (ag_align v) acc) tag_bytes vs.
+  fold_right (fun v acc => Nat.lcm (ag_align v) acc) tag_bytes vs.
 
 Definition enum_extent (vs : list agg_layout) : nat :=
   fold_right (fun v acc => Nat.max (ag_size v) acc) tag_bytes vs.
@@ -307,7 +327,7 @@ Definition c_enum (vs : list (list size_align)) : option enum_layout :=
   let variants := map c_variant vs in
   let a := enum_align variants in
   let sz := align_to (enum_extent variants) a in
-  if forallb aligns_ok vs && size_ok sz
+  if forallb aligns_ok vs && size_ok sz && (Z.of_nat (length vs) <=? 2 ^ 32)%Z
   then Some (EnumLayout sz a (tag_for (length vs)) 0 variants)
   else None.
 
@@ -320,7 +340,7 @@ Proof.
     [|discriminate].
   injection H as <-.
   apply c_fields_placed; [apply aligns_ok_pos; assumption|].
-  apply align_to_ge, c_align_nz.
+  apply align_to_ge, c_align_nz, aligns_ok_pos; assumption.
 Qed.
 
 Lemma c_struct_wf : forall (n : name) fs (r : list repr) l,
@@ -331,8 +351,17 @@ Proof.
   destruct (size_ok (align_to (c_end 0 fs) (c_align fs))) eqn:Es;
     [|discriminate].
   injection H as <-. unfold agg_wf; simpl.
-  split; [apply c_align_pos|].
-  split; [apply align_to_aligned, c_align_nz | apply size_ok_le; assumption].
+  apply aligns_ok_pos in Ea.
+  split; [apply c_align_pos; assumption|].
+  split; [apply align_to_aligned, c_align_nz; assumption | apply size_ok_le; assumption].
+Qed.
+
+Lemma c_struct_aligns : forall (n : name) fs (r : list repr) l,
+  c_struct fs = Some l -> Forall (fun f => Nat.divide (snd f) (ag_align l)) fs.
+Proof.
+  intros n fs r l H. unfold c_struct in H.
+  destruct (aligns_ok fs && size_ok _); [|discriminate].
+  injection H as <-. apply c_align_divides.
 Qed.
 
 Lemma repeat_zero_placed : forall fs total,
@@ -374,7 +403,7 @@ Proof.
   split; [apply repeat_length|].
   apply repeat_zero_placed; [apply aligns_ok_pos; assumption|].
   eapply forall_size_le_trans; [apply max_size_ge|].
-  apply align_to_ge, c_align_nz.
+  apply align_to_ge, c_align_nz, aligns_ok_pos; assumption.
 Qed.
 
 Lemma c_union_wf : forall (n : name) fs (r : list repr) l,
@@ -385,8 +414,9 @@ Proof.
   destruct (size_ok (align_to (max_size fs) (c_align fs))) eqn:Es;
     [|discriminate].
   injection H as <-. unfold agg_wf; simpl.
-  split; [apply c_align_pos|].
-  split; [apply align_to_aligned, c_align_nz | apply size_ok_le; assumption].
+  apply aligns_ok_pos in Ea.
+  split; [apply c_align_pos; assumption|].
+  split; [apply align_to_aligned, c_align_nz; assumption | apply size_ok_le; assumption].
 Qed.
 
 Lemma enum_extent_ge : forall vs, Forall (fun v => ag_size v <= enum_extent vs) vs.
@@ -399,9 +429,28 @@ Qed.
 Lemma enum_extent_base : forall vs, tag_bytes <= enum_extent vs.
 Proof. induction vs as [|v vs IH]; unfold enum_extent in *; simpl; lia. Qed.
 
-Lemma enum_align_nz : forall vs, enum_align vs <> 0.
+Lemma enum_align_nz : forall vs, Forall (fun v => ag_align v <> 0) vs -> enum_align vs <> 0.
 Proof.
-  induction vs as [|v vs IH]; unfold enum_align, tag_bytes in *; simpl; lia.
+  induction vs as [|v vs IH]; intros Ha; unfold enum_align, tag_bytes in *; simpl; [lia|].
+  inversion Ha as [|? ? Hv Hrest]; subst.
+  intros E. apply Nat.lcm_eq_0 in E. destruct E as [E|E]; [exact (Hv E) | exact (IH Hrest E)].
+Qed.
+
+Lemma c_variants_align_nz : forall vs,
+  Forall (fun fs => aligns_ok fs = true) vs -> Forall (fun v => ag_align v <> 0) (map c_variant vs).
+Proof.
+  induction vs as [|fs vs IH]; intros H; simpl; constructor; inversion H; subst.
+  - apply c_align_nz, aligns_ok_pos; assumption.
+  - apply IH; assumption.
+Qed.
+
+Lemma enum_align_divides : forall vs,
+  Forall (fun v => Nat.divide (ag_align v) (enum_align vs)) vs.
+Proof.
+  induction vs as [|v vs IH]; simpl; constructor.
+  - apply Nat.divide_lcm_l.
+  - eapply Forall_impl; [|exact IH].
+    intros w Hw. eapply Nat.divide_trans; [exact Hw | apply Nat.divide_lcm_r].
 Qed.
 
 Lemma scalar_bytes_tag : forall n, scalar_bytes (tag_for n) = tag_bytes.
@@ -438,21 +487,42 @@ Proof.
   inversion H; subst. constructor; [lia | eapply IH; eassumption].
 Qed.
 
+Lemma c_enum_ok : forall vs l,
+  c_enum vs = Some l ->
+  Forall (fun fs => aligns_ok fs = true) vs
+  /\ (Z.of_nat (length vs) <= 2 ^ 32)%Z
+  /\ l = EnumLayout (align_to (enum_extent (map c_variant vs)) (enum_align (map c_variant vs)))
+                    (enum_align (map c_variant vs)) (tag_for (length vs)) 0 (map c_variant vs).
+Proof.
+  intros vs l H. unfold c_enum in H.
+  destruct (forallb aligns_ok vs) eqn:Ea; simpl in H; [|discriminate].
+  destruct (size_ok _); simpl in H; [|discriminate].
+  destruct (_ <=? _)%Z eqn:Et; [|discriminate].
+  injection H as <-. apply Z.leb_le in Et.
+  split; [apply forallb_forall_true; assumption|]. split; [exact Et | reflexivity].
+Qed.
+
+Lemma c_enum_size_ok : forall vs l, c_enum vs = Some l -> size_ok (en_size l) = true.
+Proof.
+  intros vs l H. unfold c_enum in H.
+  destruct (forallb aligns_ok vs); simpl in H; [|discriminate].
+  destruct (size_ok _) eqn:Es; simpl in H; [|discriminate].
+  destruct (_ <=? _)%Z; [|discriminate].
+  injection H as <-. exact Es.
+Qed.
+
 Lemma c_enum_variants : forall (n : name) vs (r : list repr) l,
   c_enum vs = Some l ->
   length (en_variants l) = length vs
   /\ Forall2 (variant_placed (en_tag_offset l) (scalar_bytes (en_tag l)) (en_size l))
              vs (en_variants l).
 Proof.
-  intros n vs r l H. unfold c_enum in H.
-  destruct (forallb aligns_ok vs) eqn:Ea; simpl in H; [|discriminate].
-  destruct (size_ok _) eqn:Es; [|discriminate].
-  injection H as <-. simpl.
+  intros n vs r l H. destruct (c_enum_ok vs l H) as [Ha [_ ->]]. simpl.
   split; [apply length_map|].
   rewrite scalar_bytes_tag.
-  apply c_variants_placed; [apply forallb_forall_true; assumption|].
+  apply c_variants_placed; [assumption|].
   eapply forall_ag_size_le_trans; [apply enum_extent_ge|].
-  apply align_to_ge, enum_align_nz.
+  apply align_to_ge, enum_align_nz, c_variants_align_nz; assumption.
 Qed.
 
 Lemma c_enum_tag : forall (n : name) vs (r : list repr) l,
@@ -461,16 +531,13 @@ Lemma c_enum_tag : forall (n : name) vs (r : list repr) l,
   /\ scalar_valid_start (en_tag l) = 0%Z
   /\ scalar_valid_end (en_tag l) = (Z.of_nat (length vs) - 1)%Z.
 Proof.
-  intros n vs r l H. unfold c_enum in H.
-  destruct (forallb aligns_ok vs) eqn:Ea; simpl in H; [|discriminate].
-  destruct (size_ok _) eqn:Es; [|discriminate].
-  injection H as <-. simpl.
+  intros n vs r l H. destruct (c_enum_ok vs l H) as [Ha [_ ->]]. simpl.
   split; [|split; reflexivity].
   rewrite scalar_bytes_tag. unfold fits; simpl.
   pose proof (enum_extent_base (map c_variant vs)).
   pose proof (align_to_ge (enum_extent (map c_variant vs))
                 (enum_align (map c_variant vs))
-                (enum_align_nz (map c_variant vs))).
+                (enum_align_nz _ (c_variants_align_nz vs Ha))).
   lia.
 Qed.
 
@@ -479,13 +546,36 @@ Lemma c_enum_wf : forall (n : name) vs (r : list repr) l,
   1 <= en_align l /\ aligned (en_align l) (en_size l)
   /\ (Z.of_nat (en_size l) <= max_isize)%Z.
 Proof.
-  intros n vs r l H. unfold c_enum in H.
-  destruct (forallb aligns_ok vs) eqn:Ea; simpl in H; [|discriminate].
-  destruct (size_ok _) eqn:Es; [|discriminate].
-  injection H as <-. simpl.
-  pose proof (enum_align_nz (map c_variant vs)).
+  intros n vs r l H. pose proof (c_enum_size_ok vs l H) as Hs.
+  destruct (c_enum_ok vs l H) as [Ha [_ ->]]. simpl in *.
+  pose proof (enum_align_nz _ (c_variants_align_nz vs Ha)).
   split; [lia|].
   split; [apply align_to_aligned; assumption | apply size_ok_le; assumption].
+Qed.
+
+Lemma variants_fields_divide : forall vs a,
+  Forall (fun v => Nat.divide (ag_align v) a) (map c_variant vs) ->
+  Forall (Forall (fun f => Nat.divide (snd f) a)) vs.
+Proof.
+  induction vs as [|fs vs IH]; intros a H; constructor;
+    simpl in H; inversion H as [|? ? Hv Hrest]; subst.
+  - eapply Forall_impl; [|apply c_align_divides].
+    intros f Hf. eapply Nat.divide_trans; [exact Hf | exact Hv].
+  - apply IH; exact Hrest.
+Qed.
+
+Lemma c_enum_aligns : forall (n : name) vs (r : list repr) l,
+  c_enum vs = Some l -> Forall (Forall (fun f => Nat.divide (snd f) (en_align l))) vs.
+Proof.
+  intros n vs r l H. destruct (c_enum_ok vs l H) as [_ [_ ->]]. simpl.
+  apply variants_fields_divide, enum_align_divides.
+Qed.
+
+Lemma c_enum_tag_room : forall (n : name) vs (r : list repr) l,
+  c_enum vs = Some l ->
+  (Z.of_nat (length vs) <= 2 ^ (8 * Z.of_nat (scalar_bytes (en_tag l))))%Z.
+Proof.
+  intros n vs r l H. destruct (c_enum_ok vs l H) as [_ [Ht ->]]. exact Ht.
 Qed.
 
 #[global] Instance CAlg : LayoutAlg := {
@@ -499,4 +589,7 @@ Qed.
   enum_alg_variants := c_enum_variants;
   enum_alg_tag := c_enum_tag;
   enum_alg_wf := c_enum_wf;
+  struct_alg_aligns := c_struct_aligns;
+  enum_alg_aligns := c_enum_aligns;
+  enum_alg_tag_room := c_enum_tag_room;
 }.

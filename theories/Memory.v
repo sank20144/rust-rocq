@@ -27,7 +27,6 @@ Section Values.
   }.
 
   Inductive runtime_value :=
-    | VUnit
     | VBool (value : bool)
     | VChar (value : Z)
     | VBits (width : int_width) (bits : Z)
@@ -40,6 +39,8 @@ Section Values.
     VPtr (PointerValue (ProvenanceAllocation allocation) (Z.of_nat offset) PointerThin).
 
 End Values.
+
+Notation VUnit := (VTuple nil).
 
 Section Results.
 
@@ -230,16 +231,21 @@ Section Encoding.
   Definition valid_char (z : Z) : bool :=
     (0 <=? z)%Z && (z <=? 1114111)%Z && negb ((55296 <=? z)%Z && (z <=? 57343)%Z).
 
+  Definition in_word_range (z : Z) : bool := (0 <=? z)%Z && (z <? 2 ^ 64)%Z.
+
   Definition encode_pointer (kind : pointer_kind) (p : pointer_value) : option (list mbyte) :=
-    let address := int_bytes pointer_bytes (Z.modulo (pointer_address p) (2 ^ 64))
-                     (Some (pointer_provenance_of p)) in
-    match kind, pointer_metadata_of p with
-    | Thin, PointerThin => Some address
-    | WithLength, PointerLength n => Some (address ++ int_bytes pointer_bytes (Z.of_nat n) None)
-    | WithVTable, PointerVTable t =>
-        Some (address ++ int_bytes pointer_bytes 0 (Some (ProvenanceVTable t)))
-    | _, _ => None
-    end.
+    let address := int_bytes pointer_bytes (pointer_address p) (Some (pointer_provenance_of p)) in
+    if in_word_range (pointer_address p) then
+      match kind, pointer_metadata_of p with
+      | Thin, PointerThin => Some address
+      | WithLength, PointerLength n =>
+          if in_word_range (Z.of_nat n)
+          then Some (address ++ int_bytes pointer_bytes (Z.of_nat n) None) else None
+      | WithVTable, PointerVTable t =>
+          Some (address ++ int_bytes pointer_bytes 0 (Some (ProvenanceVTable t)))
+      | _, _ => None
+      end
+    else None.
 
   Definition decode_pointer (kind : pointer_kind) (bs : list mbyte) : access_result pointer_value :=
     let address_bytes := firstn pointer_bytes bs in
@@ -263,7 +269,6 @@ Section Encoding.
       : option (list runtime_value) :=
     match declaration, v with
     | None, VTuple vs => Some vs
-    | None, VUnit => Some []
     | Some d, VAdt d' 0 vs => if String.eqb d d' then Some vs else None
     | _, _ => None
     end.
@@ -410,7 +415,8 @@ Section Memory.
 
   Definition check_range (al : allocation) (offset size align : nat) : access_result unit :=
     _ <-? ub_unless (Nat.leb (offset + size) (allocation_size al)) UbOutOfBounds ;;
-    ub_unless (Nat.leb align (allocation_align al) && Nat.eqb (Nat.modulo offset align) 0)
+    ub_unless (Nat.eqb (Nat.modulo (allocation_align al) align) 0
+               && Nat.eqb (Nat.modulo offset align) 0)
       UbMisaligned.
 
   Definition load (m : memory_state) (a offset size align : nat) : access_result (list mbyte) :=

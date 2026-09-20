@@ -84,7 +84,7 @@ Section Models.
     induction idxs as [|i rest IH]; intros best; cbn [max_scan_loop].
     - apply hret_mono.
     - apply hbind_mono; [apply hcall_mono|]. intros r.
-      destruct r as [| | | | | | |p v xs]; try apply hret_mono.
+      destruct r as [| | | | | |p v xs]; try apply hret_mono.
       destruct v as [|[|]]; try apply hret_mono.
       destruct xs as [|x [|]]; try apply hret_mono.
       apply hbind_mono; [apply hconst_mono|]. intros xp.
@@ -163,7 +163,7 @@ Section Models.
     - apply hbind_mono; [apply hconst_mono|]. intros ip.
       apply hbind_mono; [apply hcall_mono|]. intros b.
       apply hbind_mono; [apply hconst_mono|]. intros u.
-      destruct b as [|[|]| | | | | |]; try apply hfail_mono;
+      destruct b as [[|]| | | | | |]; try apply hfail_mono;
         [apply hret_mono | apply IH].
   Qed.
 

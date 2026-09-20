@@ -17,8 +17,8 @@ Definition answer_matches (a e : answer) : bool :=
 Lemma answer_matches_eq : forall a e, answer_matches a e = true -> a = e.
 Proof.
   intros a e H.
-  destruct a as [v| | | | |]; try (destruct v as [| | |w z| | | |]; try destruct w);
-    destruct e as [v'| | | | |]; try (destruct v' as [| | |w' z'| | | |]; try destruct w');
+  destruct a as [v| | | | |]; try (destruct v as [| |w z| | | |]; try destruct w);
+    destruct e as [v'| | | | |]; try (destruct v' as [| |w' z'| | | |]; try destruct w');
     cbn in H; try discriminate; try reflexivity.
   apply Z.eqb_eq in H. subst. reflexivity.
 Qed.
