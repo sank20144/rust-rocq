@@ -16,3 +16,4 @@ tests/cargo/**/target/
 
 .vscode/
 /theories/.Makefile.d
+.nia.cache
