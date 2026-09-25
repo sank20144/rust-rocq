@@ -5,6 +5,9 @@ theories/Subst.v
 theories/LayoutAlg.v
 theories/Memory.v
 theories/Denote.v
+theories/Proof/Bytes.v
+theories/Proof/Encoding.v
+theories/Proof/Cells.v
 theories/Lib/Models.v
 theories/Lib/X86_64.v
 theories/Lib/Core.v
