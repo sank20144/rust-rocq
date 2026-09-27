@@ -55,13 +55,14 @@ Section WellFormed.
     map (fun f => (fst f, size_of (snd f))) fields.
 
   Definition struct_ok (size align : nat) (fields : list (nat * layout)) : Prop :=
-    1 <= align /\ Nat.divide align size
+    1 <= align /\ Nat.divide align size /\ (Z.of_nat size <= max_isize)%Z
     /\ Forall (fun f => fst f + size_of (snd f) <= size /\ Nat.divide (align_of (snd f)) (fst f)
                         /\ Nat.divide (align_of (snd f)) align) fields
     /\ pairwise_apart (ranges fields).
 
   Definition enum_ok (size align tag_offset tag_size : nat) (variants : list layout) : Prop :=
-    1 <= align /\ Nat.divide align size /\ tag_offset + tag_size <= size
+    1 <= align /\ Nat.divide align size /\ (Z.of_nat size <= max_isize)%Z
+    /\ tag_offset + tag_size <= size
     /\ (Z.of_nat (length variants) <= 256 ^ Z.of_nat tag_size)%Z
     /\ Forall (fun v => exists fields, v = LStruct None size align fields
                         /\ struct_ok size align fields
@@ -195,6 +196,7 @@ Section LayoutOfWellFormed.
     destruct (struct_alg_wf n _ r a E) as [Ha [Hsz _]].
     pose proof (struct_alg_aligns n _ r a E) as Hal.
     split; [exact Ha|]. split; [apply divide_of_aligned; assumption|].
+    split; [destruct (struct_alg_wf n _ r a E) as [_ [_ Hb]]; exact Hb|].
     split; [apply combine_fields_ok; assumption|].
     rewrite ranges_combine, <- map_fst_size_align. exact Hapart.
   Qed.
@@ -218,7 +220,7 @@ Section LayoutOfWellFormed.
       tag_offset tag_size,
     Forall (Forall layout_wf) variants ->
     Forall2 (variant_placed tag_offset tag_size size) (map (map size_align_of) variants) placed ->
-    1 <= align -> Nat.divide align size ->
+    1 <= align -> Nat.divide align size -> (Z.of_nat size <= max_isize)%Z ->
     Forall (Forall (fun f => Nat.divide (snd f) align)) (map (map size_align_of) variants) ->
     Forall (fun v => exists fields, v = LStruct None size align fields
                      /\ struct_ok size align fields
@@ -230,14 +232,14 @@ Section LayoutOfWellFormed.
                 (combine placed variants)).
   Proof.
     induction variants as [|fs variants IH];
-      intros placed size align tag_offset tag_size Hwf Hp Ha Hd Hal.
+      intros placed size align tag_offset tag_size Hwf Hp Ha Hd Hbound Hal.
     { inversion Hp; subst. split; constructor. }
     inversion Hp as [|? p ? placed' Hv Hrest]; subst. simpl.
     inversion Hwf as [|? ? Hfs Hwfs]; subst. inversion Hal as [|? ? Halfs Hals]; subst.
-    destruct (IH placed' size align tag_offset tag_size Hwfs Hrest Ha Hd Hals) as [IH1 IH2].
+    destruct (IH placed' size align tag_offset tag_size Hwfs Hrest Ha Hd Hbound Hals) as [IH1 IH2].
     destruct Hv as [[_ [Hpl Hapart]] [Hsize Htag]].
     assert (Hok : struct_ok size align (combine (ag_offsets p) fs)).
-    { split; [exact Ha|]. split; [exact Hd|].
+    { split; [exact Ha|]. split; [exact Hd|]. split; [exact Hbound|].
       split; [|rewrite ranges_combine, <- map_fst_size_align; exact Hapart].
       pose proof (combine_fields_ok fs (ag_offsets p) (ag_size p) align Hfs Hpl Halfs) as Hc.
       eapply Forall_impl; [|exact Hc]. intros f [H1 H2]. split; [lia | exact H2]. }
@@ -263,15 +265,17 @@ Section LayoutOfWellFormed.
     injection H as <-.
     destruct (enum_alg_variants _ _ _ _ E) as [Hlen Hplaced].
     destruct (enum_alg_tag _ _ _ _ E) as [Hfits _].
-    destruct (enum_alg_wf _ _ _ _ E) as [Ha [Hsz _]].
+    destruct (enum_alg_wf _ _ _ _ E) as [Ha [Hal0 Hsz]].
     pose proof (enum_alg_aligns _ _ _ _ E) as Hal.
     pose proof (enum_alg_tag_room _ _ _ _ E) as Hroom.
     rewrite length_map in Hlen, Hroom.
     assert (Hd : Nat.divide (en_align e) (en_size e)) by (apply divide_of_aligned; assumption).
+    clear Hal0.
     destruct (variant_structs_ok variants (en_variants e) (en_size e) (en_align e)
-                (en_tag_offset e) (scalar_bytes (en_tag e)) Hwf Hplaced Ha Hd Hal) as [Hv Hw].
+                (en_tag_offset e) (scalar_bytes (en_tag e)) Hwf Hplaced Ha Hd Hsz Hal) as [Hv Hw].
     apply enum_wf_intro; [|exact Hw].
-    split; [exact Ha|]. split; [exact Hd|]. split; [unfold fits in Hfits; exact Hfits|].
+    split; [exact Ha|]. split; [exact Hd|]. split; [exact Hsz|].
+    split; [unfold fits in Hfits; exact Hfits|].
     split; [|exact Hv].
     rewrite length_map, length_combine_eq by lia.
     rewrite Hlen. rewrite Z.pow_mul_r in Hroom by lia. exact Hroom.
@@ -498,7 +502,7 @@ Section Lengths.
       destruct (field_parts _ vs) as [parts|] eqn:E; [|discriminate].
       injection H as <-. apply field_parts_encoded in E.
       pose proof (struct_fields_wf _ _ _ _ Hwf) as Hfw.
-      destruct Hwf as [[_ [_ [Hfits _]]] _].
+      destruct Hwf as [[_ [_ [_ [Hfits _]]]] _].
       rewrite length_splice_all; [apply repeat_length|].
       rewrite repeat_length. clear -E IHf Hfw Hfits.
       induction E as [|o f v b fields vs parts Hb Hrest IHE]; constructor.
@@ -514,7 +518,7 @@ Section Lengths.
       destruct (encode variant (VTuple vs)) as [bs'|] eqn:Eb; [|discriminate].
       injection H as <-.
       pose proof (enum_variants_wf _ _ _ _ _ _ Hwf) as Hvw.
-      destruct Hwf as [[_ [_ [Htag [_ Hvs]]]] _].
+      destruct Hwf as [[_ [_ [_ [Htag [_ Hvs]]]]] _].
       assert (Hin : In variant variants) by (eapply nth_error_In; exact Ev).
       rewrite Forall_forall in IHf, Hvw, Hvs.
       destruct (Hvs variant Hin) as [fields [-> _]].
@@ -697,7 +701,7 @@ Section Extraction.
   Proof.
     intros d size align fields v bs vs i o f x Hwf H Hvs Hf Hx.
     pose proof (struct_fields_wf _ _ _ _ Hwf) as Hfw.
-    destruct Hwf as [[_ [_ [Hfits Hapart]]] _].
+    destruct Hwf as [[_ [_ [_ [Hfits Hapart]]]] _].
     simpl in H. rewrite Hvs, place_fields_parts in H.
     destruct (field_parts _ vs) as [parts|] eqn:E; [|discriminate].
     injection H as <-. apply field_parts_encoded in E.
@@ -725,7 +729,7 @@ Section Extraction.
   Proof.
     intros d size align tag_offset tag_size variants k variant Hwf Hk.
     pose proof (enum_variants_wf _ _ _ _ _ _ Hwf) as Hvw.
-    destruct Hwf as [[_ [_ [_ [_ Hvs]]]] _].
+    destruct Hwf as [[_ [_ [_ [_ [_ Hvs]]]]] _].
     assert (Hin : In variant variants) by (eapply nth_error_In; exact Hk).
     rewrite Forall_forall in Hvw, Hvs.
     destruct (Hvs _ Hin) as [fields [-> [_ Hap]]].
@@ -774,7 +778,7 @@ Section Extraction.
         split; [exact Hwff|]. split; [exact Hfit|]. split; [exact Hda|]. split; [exact Hdo|].
         rewrite Henc. f_equal. symmetry. apply bytes_at_splice_apart.
         * rewrite length_int_bytes, (encode_length _ _ _ Hvwf Hvb). simpl.
-          destruct Hwf as [[_ [_ [Htag _]]] _]. exact Htag.
+          destruct Hwf as [[_ [_ [_ [Htag _]]]] _]. exact Htag.
         * rewrite length_int_bytes.
           assert (Hin : In (o0, size_of f) (ranges fields)).
           { unfold ranges. apply in_map_iff. exists (o0, f). split; [reflexivity|].
@@ -997,7 +1001,7 @@ Section RoundTrip.
       injection H as <-.
       pose proof (enum_variants_wf _ _ _ _ _ _ Hwf) as Hvw.
       destruct (variant_of_enum _ _ _ _ _ _ _ _ Hwf Hk) as [fields [-> [Hvwf Hap]]].
-      destruct Hwf as [[_ [_ [Htag [Hroom _]]]] _].
+      destruct Hwf as [[_ [_ [_ [Htag [Hroom _]]]]] _].
       assert (Hkl : k < length variants) by (apply nth_error_Some; congruence).
       assert (Hvlen : length vb = size) by (rewrite (encode_length _ _ _ Hvwf Hvb); reflexivity).
       cbn [decode].
@@ -1133,7 +1137,7 @@ Section Update.
   Proof.
     intros d size align fields v bs vs i o f y bnew Hwf H Hvs Hf Hy.
     pose proof (struct_fields_wf _ _ _ _ Hwf) as Hfw.
-    destruct Hwf as [[_ [_ [Hfits Hapart]]] _].
+    destruct Hwf as [[_ [_ [_ [Hfits Hapart]]]] _].
     pose proof (struct_fields_shape d v vs Hvs) as Hshape.
     cbn [encode] in H. rewrite Hvs, place_fields_parts in H.
     destruct (field_parts _ vs) as [parts|] eqn:E; [|discriminate].
@@ -1223,7 +1227,7 @@ Section Update.
         rewrite Henc. cbn [option_map]. f_equal.
         pose proof (struct_field_encode _ _ _ _ _ _ _ _ _ _ _ Hvwf Hvb eq_refl Hf Hx)
           as [Hwff [Hfit _]].
-        destruct Hwf as [[_ [_ [Htag _]]] _].
+        destruct Hwf as [[_ [_ [_ [Htag _]]]] _].
         assert (Hvl : length vb = size) by (rewrite (encode_length _ _ _ Hvwf Hvb); reflexivity).
         assert (Hyl : length bnew = size_of f) by exact (encode_length _ _ _ Hwff Hy).
         assert (Hin : In (o0, size_of f) (ranges fields)).

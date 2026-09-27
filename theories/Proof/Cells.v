@@ -395,7 +395,7 @@ Section Models.
     injection H as <-.
     pose proof (enum_variants_wf _ _ _ _ _ _ Hwf) as Hvw.
     destruct (variant_of_enum _ _ _ _ _ _ _ _ Hwf Hk) as [fields [-> [Hvwf _]]].
-    destruct Hwf as [[_ [_ [Htag [Hroom _]]]] _].
+    destruct Hwf as [[_ [_ [_ [Htag [Hroom _]]]]] _].
     assert (Hkl : k < length variants) by (apply nth_error_Some; congruence).
     assert (Hvlen : length vb = size) by (rewrite (encode_length _ _ _ Hvwf Hvb); reflexivity).
     split; [|lia].
@@ -417,7 +417,7 @@ Section Models.
     rewrite Hl in Hl'. injection Hl' as <-.
     destruct (at_path_encode p l v o _ _ bs Hwf Hbs Hp) as [Hwft [Hfit [_ [_ Henc]]]].
     destruct (enum_tag_bytes _ _ _ _ _ _ _ _ _ Hwft Henc) as [Htag Hroom].
-    pose proof Hwft as Hwft'. destruct Hwft' as [[_ [_ [Htagfit _]]] _]. simpl in Hfit.
+    pose proof Hwft as Hwft'. destruct Hwft' as [[_ [_ [_ [Htagfit _]]]] _]. simpl in Hfit.
     unfold variant_tag, located_layout. simpl. rewrite Hty. simpl.
     unfold load, live_allocation. rewrite Hm. unfold check_range.
     cbn [allocation_size allocation_align allocation_bytes allocation_live and_then].

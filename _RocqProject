@@ -8,6 +8,9 @@ theories/Denote.v
 theories/Proof/Bytes.v
 theories/Proof/Encoding.v
 theories/Proof/Cells.v
+theories/Proof/Shapes.v
+theories/Proof/Steps.v
+theories/Proof/Tactics.v
 theories/Lib/Models.v
 theories/Lib/X86_64.v
 theories/Lib/Core.v
