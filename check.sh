@@ -21,7 +21,10 @@ for built in $(find theories tests -name '*.vo' -o -name '*.glob' -o -name '*.vo
 done
 
 if ! command -v rocq >/dev/null 2>&1 && command -v opam >/dev/null 2>&1; then
-    eval "$(opam env 2>/dev/null)" || true
+    for switch in $(opam switch list --short 2>/dev/null); do
+        eval "$(opam env --switch="$switch" --set-switch 2>/dev/null)" || continue
+        command -v rocq >/dev/null 2>&1 && break
+    done
 fi
 if ! command -v rocq >/dev/null 2>&1; then
     echo "rocq not found on PATH." >&2
@@ -30,12 +33,23 @@ if ! command -v rocq >/dev/null 2>&1; then
     exit 1
 fi
 
+for theory in $(find theories -name '*.v'); do
+    if ! grep -qx "$theory" _RocqProject; then
+        echo "FAIL ($theory is not listed in _RocqProject)" >&2
+        exit 1
+    fi
+done
+
 rocq makefile -f _RocqProject -o Makefile >/dev/null && make -s
 
 if grep -rn 'Admitted\.\|^[[:space:]]*admit\.' theories tests --include='*.v'; then
     echo "FAIL (admitted proof)" >&2
     exit 1
 fi
+
+proofs=$(grep '^theories/Proof/' _RocqProject)
+printf '%-12s ok  %s files, %s lemmas proved\n' proofs \
+    "$(echo "$proofs" | wc -l)" "$(cat $proofs | grep -c 'Qed\.')"
 
 rm -rf "$out"
 fail=0
