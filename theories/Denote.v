@@ -294,7 +294,11 @@ Section Operators.
         if is_trait_object_pointer dst
         then ret (VPtr (PointerValue provenance address (PointerVTable pointee)))
         else fail "unsizing cast other than to a trait object"
-    | _, _ => fail "unsizing cast of a value that is not a thin pointer"
+    | VPtr (PointerValue _ _ (PointerVTable _)), _ =>
+        if is_trait_object_pointer dst
+        then ret v
+        else fail "unsizing cast of a trait object to something other than a trait object"
+    | _, _ => fail "unsizing cast of a value that is neither a thin pointer nor a trait object"
     end.
 
 End Operators.

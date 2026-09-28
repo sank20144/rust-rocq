@@ -250,3 +250,8 @@ Qed.
 Example without_the_program_a_call_has_no_body :
   Means (only_adts adts) quadruple [] [u32 3] (AUnmodelled "no body for double").
 Proof. apply (means_within (only_adts adts) 100). vm_compute. reflexivity. Qed.
+
+Example returning_a_trait_object_keeps_its_concrete_type :
+  Means P as_debug (state_memory (local_state adts [Init (TUint W32) (u32 41)])) [VPointer 0 0]
+    (ARet (VPtr (PointerValue (ProvenanceAllocation 0) 0 (PointerVTable (TUint W32))))).
+Proof. apply (means_within P 10). vm_compute. reflexivity. Qed.

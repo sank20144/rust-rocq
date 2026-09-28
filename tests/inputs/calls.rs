@@ -234,3 +234,7 @@ impl<T: Copy> Choose for Wrap<T> {
 pub fn choose_first(flag: bool, a: u16, b: u16) -> u16 {
     Wrap(flag).choose(a, b)
 }
+
+pub fn as_debug(x: &u32) -> &dyn std::fmt::Debug {
+    x
+}
