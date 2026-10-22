@@ -110,7 +110,10 @@ impl Output {
         let mut idents = Vec::new();
         for (name, body) in &self.entries {
             let id = unique(&ident(name), &idents);
-            out.push_str(&format!("Definition {id} : body :=\n  {}.\n\n", body.render_at(2)));
+            out.push_str(&format!(
+                "Definition {id} : body :=\n  {}.\n\n",
+                body.render_at(2)
+            ));
             idents.push(id);
         }
 
@@ -170,11 +173,15 @@ fn unique(base: &str, taken: &[String]) -> String {
     if !taken.iter().any(|t| t == base) {
         return base.to_owned();
     }
-    (1..).map(|n| format!("{base}_{n}")).find(|c| !taken.contains(c)).unwrap()
+    (1..)
+        .map(|n| format!("{base}_{n}"))
+        .find(|c| !taken.contains(c))
+        .unwrap()
 }
 
 pub fn source_name(path: &Path) -> String {
-    path.file_name().map_or_else(|| "input".to_owned(), |n| n.to_string_lossy().into_owned())
+    path.file_name()
+        .map_or_else(|| "input".to_owned(), |n| n.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]

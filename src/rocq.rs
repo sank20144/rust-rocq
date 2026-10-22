@@ -112,8 +112,7 @@ impl Term {
                 head.len() + args.iter().map(|a| 1 + a.width() + 2).sum::<usize>()
             }
             Term::List(items) | Term::Tuple(items) => {
-                2 + items.iter().map(Term::width).sum::<usize>()
-                    + 2 * items.len().saturating_sub(1)
+                2 + items.iter().map(Term::width).sum::<usize>() + 2 * items.len().saturating_sub(1)
             }
             Term::Str(s) => s.len() + s.matches('"').count() + 2,
             Term::Nat(n) => digits(*n),
@@ -280,7 +279,11 @@ fn write_string(out: &mut String, s: &str) {
 }
 
 fn digits(n: u128) -> usize {
-    if n == 0 { 1 } else { n.ilog10() as usize + 1 }
+    if n == 0 {
+        1
+    } else {
+        n.ilog10() as usize + 1
+    }
 }
 
 #[cfg(test)]
@@ -289,7 +292,10 @@ mod tests {
 
     #[test]
     fn nested_applications_get_parenthesised() {
-        let t = app("TRef", vec![atom("RStatic"), app("TInt", vec![atom("W32")]), atom("Imm")]);
+        let t = app(
+            "TRef",
+            vec![atom("RStatic"), app("TInt", vec![atom("W32")]), atom("Imm")],
+        );
         assert_eq!(t.render(), "TRef RStatic (TInt W32) Imm");
     }
 
@@ -306,7 +312,10 @@ mod tests {
 
     #[test]
     fn triples_render_as_rocq_tuples() {
-        assert_eq!(triple(nat(1u32), nat(2u32), nat(3u32)).render(), "(1, 2, 3)");
+        assert_eq!(
+            triple(nat(1u32), nat(2u32), nat(3u32)).render(),
+            "(1, 2, 3)"
+        );
     }
 
     #[test]
@@ -316,7 +325,10 @@ mod tests {
 
     #[test]
     fn notes_are_invisible_when_the_term_fits() {
-        let t = app("Body", vec![note("name", string("f")), note("args", nat(2u32))]);
+        let t = app(
+            "Body",
+            vec![note("name", string("f")), note("args", nat(2u32))],
+        );
         assert_eq!(t.render(), "Body \"f\" 2");
     }
 
@@ -332,7 +344,9 @@ mod tests {
 
     #[test]
     fn long_lists_break_one_element_per_line() {
-        let items: Vec<Term> = (0..40).map(|i| app("BasicBlock", vec![nat(i as u32)])).collect();
+        let items: Vec<Term> = (0..40)
+            .map(|i| app("BasicBlock", vec![nat(i as u32)]))
+            .collect();
         let out = list(items).render();
         assert!(out.starts_with("[ BasicBlock 0\n"), "{out}");
         assert!(out.contains("\n; BasicBlock 1"), "{out}");
@@ -343,10 +357,16 @@ mod tests {
     fn constructor_coverage_ignores_data_and_comments() {
         let t = note(
             "ignored",
-            app("Body", vec![app("TInt", vec![atom("W32")]), string("TBool")]),
+            app(
+                "Body",
+                vec![app("TInt", vec![atom("W32")]), string("TBool")],
+            ),
         );
         let mut heads = BTreeSet::new();
         t.collect_heads(&mut heads);
-        assert_eq!(heads.into_iter().collect::<Vec<_>>(), vec!["Body", "TInt", "W32"]);
+        assert_eq!(
+            heads.into_iter().collect::<Vec<_>>(),
+            vec!["Body", "TInt", "W32"]
+        );
     }
 }

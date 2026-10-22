@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use rustc_middle::ty::{self, Ty, TyCtxt, ValTreeKindExt as _};
-use rustc_type_ir::{ConstKind, RegionKind, TyKind, UnevaluatedConstKind};
 use rustc_span::Span;
+use rustc_type_ir::{ConstKind, RegionKind, TyKind, UnevaluatedConstKind};
 
 use crate::rocq::{self, Term};
 
@@ -99,9 +99,7 @@ impl<'tcx> Cx<'tcx> {
             Array(elem, len) => rocq::app("TArray", vec![self.ty(*elem), self.tconst(*len)]),
             Pat(base, pat) => rocq::app("TPat", vec![self.ty(*base), self.ty_pat(*pat)]),
             Slice(elem) => rocq::app("TSlice", vec![self.ty(*elem)]),
-            RawPtr(pointee, m) => {
-                rocq::app("TRawPtr", vec![self.ty(*pointee), mutability(*m)])
-            }
+            RawPtr(pointee, m) => rocq::app("TRawPtr", vec![self.ty(*pointee), mutability(*m)]),
             Ref(r, pointee, m) => rocq::app(
                 "TRef",
                 vec![self.region(*r), self.ty(*pointee), mutability(*m)],
@@ -109,17 +107,15 @@ impl<'tcx> Cx<'tcx> {
             FnDef(def_id, args) => {
                 rocq::app("TFnDef", vec![self.path(*def_id), self.generic_args(args)])
             }
-            FnPtr(sig_tys, hdr) => {
-                rocq::app("TFnPtr", vec![self.fn_sig(*sig_tys, *hdr)])
-            }
+            FnPtr(sig_tys, hdr) => rocq::app("TFnPtr", vec![self.fn_sig(*sig_tys, *hdr)]),
             UnsafeBinder(b) => rocq::app("TUnsafeBinder", vec![self.ty(b.skip_binder())]),
-            Dynamic(preds, r) => rocq::app(
-                "TDynamic",
-                vec![self.dyn_preds(preds), self.region(*r)],
-            ),
-            Closure(def_id, args) => {
-                rocq::app("TClosure", vec![self.path(*def_id), self.generic_args(args)])
+            Dynamic(preds, r) => {
+                rocq::app("TDynamic", vec![self.dyn_preds(preds), self.region(*r)])
             }
+            Closure(def_id, args) => rocq::app(
+                "TClosure",
+                vec![self.path(*def_id), self.generic_args(args)],
+            ),
             CoroutineClosure(def_id, args) => rocq::app(
                 "TCoroutineClosure",
                 vec![self.path(*def_id), self.generic_args(args)],
@@ -218,7 +214,11 @@ impl<'tcx> Cx<'tcx> {
             ),
             ConstKind::Value(v) => {
                 let t = self.ty(v.ty);
-                match v.valtree.try_to_scalar().and_then(|s| s.try_to_scalar_int().ok()) {
+                match v
+                    .valtree
+                    .try_to_scalar()
+                    .and_then(|s| s.try_to_scalar_int().ok())
+                {
                     Some(s) => rocq::app("CValue", vec![t, rocq::int(s.to_int(s.size()))]),
                     None => rocq::app("CError", vec![rocq::string("non-scalar valtree")]),
                 }
@@ -230,7 +230,10 @@ impl<'tcx> Cx<'tcx> {
                     | UnevaluatedConstKind::Free { def_id }
                     | UnevaluatedConstKind::Anon { def_id } => def_id,
                 };
-                rocq::app("CUnevaluated", vec![self.path(def_id), self.generic_args(u.args)])
+                rocq::app(
+                    "CUnevaluated",
+                    vec![self.path(def_id), self.generic_args(u.args)],
+                )
             }
             ConstKind::Bound(depth, var) => rocq::app(
                 "CBound",
@@ -243,9 +246,7 @@ impl<'tcx> Cx<'tcx> {
                 "CError",
                 vec![rocq::string(format!("placeholder const {:?}", p))],
             ),
-            ConstKind::Expr(_) => {
-                rocq::app("CError", vec![rocq::string("const expr")])
-            }
+            ConstKind::Expr(_) => rocq::app("CError", vec![rocq::string("const expr")]),
             ConstKind::Error(_) => rocq::app("CError", vec![rocq::string("const error")]),
         }
     }
@@ -255,16 +256,18 @@ impl<'tcx> Cx<'tcx> {
             args.iter()
                 .map(|a| match a.kind() {
                     ty::GenericArgKind::Type(t) => rocq::app("GTy", vec![self.ty(t)]),
-                    ty::GenericArgKind::Lifetime(r) => {
-                        rocq::app("GLifetime", vec![self.region(r)])
-                    }
+                    ty::GenericArgKind::Lifetime(r) => rocq::app("GLifetime", vec![self.region(r)]),
                     ty::GenericArgKind::Const(c) => rocq::app("GConst", vec![self.tconst(c)]),
                 })
                 .collect(),
         )
     }
 
-    fn fn_sig(&self, sig_tys: ty::Binder<'tcx, ty::FnSigTys<TyCtxt<'tcx>>>, hdr: ty::FnHeader<TyCtxt<'tcx>>) -> Term {
+    fn fn_sig(
+        &self,
+        sig_tys: ty::Binder<'tcx, ty::FnSigTys<TyCtxt<'tcx>>>,
+        hdr: ty::FnHeader<TyCtxt<'tcx>>,
+    ) -> Term {
         let tys = sig_tys.skip_binder();
         let inputs: Vec<Term> = tys.inputs().iter().map(|t| self.ty(*t)).collect();
         rocq::app(
@@ -284,9 +287,10 @@ impl<'tcx> Cx<'tcx> {
             preds
                 .iter()
                 .map(|p| match p.skip_binder() {
-                    ty::ExistentialPredicate::Trait(t) => {
-                        rocq::app("DTrait", vec![self.path(t.def_id), self.generic_args(t.args)])
-                    }
+                    ty::ExistentialPredicate::Trait(t) => rocq::app(
+                        "DTrait",
+                        vec![self.path(t.def_id), self.generic_args(t.args)],
+                    ),
                     ty::ExistentialPredicate::Projection(p) => rocq::app(
                         "DProjection",
                         vec![

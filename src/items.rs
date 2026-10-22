@@ -12,7 +12,11 @@ pub struct Items {
 }
 
 pub fn collect(cx: &Cx<'_>) -> Items {
-    let mut items = Items { adts: Vec::new(), traits: Vec::new(), impls: Vec::new() };
+    let mut items = Items {
+        adts: Vec::new(),
+        traits: Vec::new(),
+        impls: Vec::new(),
+    };
 
     let mut ids: Vec<_> = cx.tcx.hir_crate_items(()).definitions().collect();
     ids.sort_by_key(|id| id.local_def_index.as_u32());
@@ -20,9 +24,7 @@ pub fn collect(cx: &Cx<'_>) -> Items {
     for local in ids {
         let def_id = local.to_def_id();
         match cx.tcx.def_kind(local) {
-            DefKind::Struct | DefKind::Enum | DefKind::Union => {
-                items.adts.push(cx.adt_def(def_id))
-            }
+            DefKind::Struct | DefKind::Enum | DefKind::Union => items.adts.push(cx.adt_def(def_id)),
             DefKind::Trait => items.traits.push(cx.trait_def(def_id)),
             DefKind::Impl { of_trait: true } => items.impls.push(cx.impl_def(def_id)),
             _ => {}
@@ -185,9 +187,7 @@ impl<'tcx> Cx<'tcx> {
                 rocq::app(
                     "AssocItem",
                     vec![
-                        rocq::string(
-                            item.opt_name().map_or_else(String::new, |n| n.to_string()),
-                        ),
+                        rocq::string(item.opt_name().map_or_else(String::new, |n| n.to_string())),
                         self.path(item.def_id),
                         kind,
                         rocq::boolean(item.defaultness(self.tcx).has_value()),

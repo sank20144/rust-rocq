@@ -365,10 +365,7 @@ mod tests {
 
     #[test]
     fn loan_ending_is_specific_to_the_edge_where_it_dies() {
-        let live = BTreeMap::from([
-            (p(0), BTreeSet::from([7])),
-            (p(1), BTreeSet::from([7])),
-        ]);
+        let live = BTreeMap::from([(p(0), BTreeSet::from([7])), (p(1), BTreeSet::from([7]))]);
         let edges = BTreeSet::from([(p(0), p(1)), (p(0), p(2))]);
 
         let ends = loan_ends(&live, &edges);

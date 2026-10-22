@@ -1,20 +1,13 @@
 use std::collections::BTreeMap;
 
 use rustc_hir::def_id::DefId;
-use rustc_middle::mir;
-use rustc_middle::ty;
+use rustc_middle::{mir, ty};
 
 use crate::rocq::{self, Term};
 use crate::ty::{mutability, Cx};
 
 impl<'tcx> Cx<'tcx> {
-    pub fn body(
-        &self,
-        def_id: DefId,
-        name: &str,
-        body: &mir::Body<'tcx>,
-        borrowck: Term,
-    ) -> Term {
+    pub fn body(&self, def_id: DefId, name: &str, body: &mir::Body<'tcx>, borrowck: Term) -> Term {
         self.set_file(self.span_file(body.span));
         let names = debug_names(body);
 
@@ -26,15 +19,18 @@ impl<'tcx> Cx<'tcx> {
                     Some(n) => format!("_{} {n}", local.as_u32()),
                     None => format!("_{}", local.as_u32()),
                 };
-                rocq::note(label, rocq::app(
-                    "LocalDecl",
-                    vec![
-                        self.ty(decl.ty),
-                        mutability(decl.mutability),
-                        rocq::option(names.get(&local).map(|n| rocq::string(n.clone()))),
-                        self.span(decl.source_info.span),
-                    ],
-                ))
+                rocq::note(
+                    label,
+                    rocq::app(
+                        "LocalDecl",
+                        vec![
+                            self.ty(decl.ty),
+                            mutability(decl.mutability),
+                            rocq::option(names.get(&local).map(|n| rocq::string(n.clone()))),
+                            self.span(decl.source_info.span),
+                        ],
+                    ),
+                )
             })
             .collect();
 
@@ -47,21 +43,24 @@ impl<'tcx> Cx<'tcx> {
                 } else {
                     format!("bb{}", bb.as_u32())
                 };
-                rocq::note(label, rocq::app(
-                    "BasicBlock",
-                    vec![
-                        rocq::nat(bb.as_u32() as u64),
-                        rocq::list(data.statements.iter().map(|s| self.statement(s)).collect()),
-                        match &data.terminator {
-                            Some(t) => self.terminator(t),
-                            None => rocq::app(
-                                "Term",
-                                vec![rocq::atom("NoSpan"), rocq::atom("TUnreachable")],
-                            ),
-                        },
-                        rocq::boolean(data.is_cleanup),
-                    ],
-                ))
+                rocq::note(
+                    label,
+                    rocq::app(
+                        "BasicBlock",
+                        vec![
+                            rocq::nat(bb.as_u32() as u64),
+                            rocq::list(data.statements.iter().map(|s| self.statement(s)).collect()),
+                            match &data.terminator {
+                                Some(t) => self.terminator(t),
+                                None => rocq::app(
+                                    "Term",
+                                    vec![rocq::atom("NoSpan"), rocq::atom("TUnreachable")],
+                                ),
+                            },
+                            rocq::boolean(data.is_cleanup),
+                        ],
+                    ),
+                )
             })
             .collect();
 
@@ -95,9 +94,7 @@ impl<'tcx> Cx<'tcx> {
                     let idx = rocq::nat(p.index as u64);
                     let nm = rocq::string(p.name.to_string());
                     match p.kind {
-                        ty::GenericParamDefKind::Lifetime => {
-                            rocq::app("GpLifetime", vec![idx, nm])
-                        }
+                        ty::GenericParamDefKind::Lifetime => rocq::app("GpLifetime", vec![idx, nm]),
                         ty::GenericParamDefKind::Type { .. } => rocq::app("GpTy", vec![idx, nm]),
                         ty::GenericParamDefKind::Const { .. } => rocq::app(
                             "GpConst",
@@ -150,9 +147,7 @@ impl<'tcx> Cx<'tcx> {
             }
             ty::ClauseKind::WellFormed(term) => match term.kind() {
                 ty::TermKind::Ty(t) => rocq::app("BdWellFormedTy", vec![self.ty(t)]),
-                ty::TermKind::Const(c) => {
-                    rocq::app("BdWellFormedConst", vec![self.tconst(c)])
-                }
+                ty::TermKind::Const(c) => rocq::app("BdWellFormedConst", vec![self.tconst(c)]),
             },
             ty::ClauseKind::ConstEvaluatable(c) => {
                 rocq::app("BdConstEvaluatable", vec![self.tconst(c)])
@@ -185,13 +180,19 @@ impl<'tcx> Cx<'tcx> {
         use mir::ProjectionElem::*;
         match e {
             Deref => rocq::atom("PDeref"),
-            Field(idx, t) => {
-                rocq::app("PField", vec![rocq::nat(idx.as_u32() as u64), self.ty(t)])
-            }
+            Field(idx, t) => rocq::app("PField", vec![rocq::nat(idx.as_u32() as u64), self.ty(t)]),
             Index(l) => rocq::app("PIndex", vec![rocq::nat(l.as_u32() as u64)]),
-            ConstantIndex { offset, min_length, from_end } => rocq::app(
+            ConstantIndex {
+                offset,
+                min_length,
+                from_end,
+            } => rocq::app(
                 "PConstantIndex",
-                vec![rocq::nat(offset), rocq::nat(min_length), rocq::boolean(from_end)],
+                vec![
+                    rocq::nat(offset),
+                    rocq::nat(min_length),
+                    rocq::boolean(from_end),
+                ],
             ),
             Subslice { from, to, from_end } => rocq::app(
                 "PSubslice",
@@ -226,10 +227,7 @@ impl<'tcx> Cx<'tcx> {
     }
 
     fn const_op(&self, c: &mir::ConstOperand<'tcx>) -> Term {
-        rocq::app(
-            "ConstOp",
-            vec![self.span(c.span), self.constant(c.const_)],
-        )
+        rocq::app("ConstOp", vec![self.span(c.span), self.constant(c.const_)])
     }
 
     fn constant(&self, c: mir::Const<'tcx>) -> Term {
@@ -268,9 +266,7 @@ impl<'tcx> Cx<'tcx> {
             ),
             ThreadLocalRef(def_id) => rocq::app("RThreadLocalRef", vec![self.path(*def_id)]),
             RawPtr(k, p) => rocq::app("RRawPtr", vec![raw_ptr_kind(*k), self.place(p)]),
-            Cast(k, o, t) => {
-                rocq::app("RCast", vec![cast_kind(*k), self.operand(o), self.ty(*t)])
-            }
+            Cast(k, o, t) => rocq::app("RCast", vec![cast_kind(*k), self.operand(o), self.ty(*t)]),
             BinaryOp(op, args) => rocq::app(
                 "RBinaryOp",
                 vec![bin_op(*op), self.operand(&args.0), self.operand(&args.1)],
@@ -309,9 +305,10 @@ impl<'tcx> Cx<'tcx> {
                     rocq::option(active.map(|f| rocq::nat(f.as_u32() as u64))),
                 ],
             ),
-            Closure(def_id, args) => {
-                rocq::app("AgClosure", vec![self.path(*def_id), self.generic_args(args)])
-            }
+            Closure(def_id, args) => rocq::app(
+                "AgClosure",
+                vec![self.path(*def_id), self.generic_args(args)],
+            ),
             Coroutine(def_id, args) => rocq::app(
                 "AgCoroutine",
                 vec![self.path(*def_id), self.generic_args(args)],
@@ -335,11 +332,11 @@ impl<'tcx> Cx<'tcx> {
         use mir::StatementKind::*;
         match k {
             Assign(b) => rocq::app("SAssign", vec![self.place(&b.0), self.rvalue(&b.1)]),
-            FakeRead(b) => rocq::app(
-                "SFakeRead",
-                vec![fake_read_cause(&b.0), self.place(&b.1)],
-            ),
-            SetDiscriminant { place, variant_index } => rocq::app(
+            FakeRead(b) => rocq::app("SFakeRead", vec![fake_read_cause(&b.0), self.place(&b.1)]),
+            SetDiscriminant {
+                place,
+                variant_index,
+            } => rocq::app(
                 "SSetDiscriminant",
                 vec![self.place(place), rocq::nat(variant_index.as_u32() as u64)],
             ),
@@ -354,9 +351,7 @@ impl<'tcx> Cx<'tcx> {
                     variance(*var),
                 ],
             ),
-            Coverage(kind) => {
-                rocq::app("SCoverage", vec![rocq::string(format!("{kind:?}"))])
-            }
+            Coverage(kind) => rocq::app("SCoverage", vec![rocq::string(format!("{kind:?}"))]),
             Intrinsic(i) => rocq::app("SIntrinsic", vec![self.nd_intrinsic(i)]),
             ConstEvalCounter => rocq::atom("SConstEvalCounter"),
             Nop => rocq::atom("SNop"),
@@ -369,9 +364,7 @@ impl<'tcx> Cx<'tcx> {
 
     fn nd_intrinsic(&self, i: &mir::NonDivergingIntrinsic<'tcx>) -> Term {
         match i {
-            mir::NonDivergingIntrinsic::Assume(o) => {
-                rocq::app("NiAssume", vec![self.operand(o)])
-            }
+            mir::NonDivergingIntrinsic::Assume(o) => rocq::app("NiAssume", vec![self.operand(o)]),
             mir::NonDivergingIntrinsic::CopyNonOverlapping(c) => rocq::app(
                 "NiCopyNonOverlapping",
                 vec![
@@ -411,7 +404,13 @@ impl<'tcx> Cx<'tcx> {
             UnwindTerminate(r) => rocq::app("TUnwindTerminate", vec![terminate_reason(*r)]),
             Return => rocq::atom("TReturn"),
             Unreachable => rocq::atom("TUnreachable"),
-            Drop { place, target, unwind, replace, drop } => rocq::app(
+            Drop {
+                place,
+                target,
+                unwind,
+                replace,
+                drop,
+            } => rocq::app(
                 "TDrop",
                 vec![
                     self.place(place),
@@ -441,7 +440,11 @@ impl<'tcx> Cx<'tcx> {
                     self.span(*fn_span),
                 ],
             ),
-            TailCall { func, args, fn_span } => rocq::app(
+            TailCall {
+                func,
+                args,
+                fn_span,
+            } => rocq::app(
                 "TTailCall",
                 vec![
                     self.operand(func),
@@ -449,7 +452,13 @@ impl<'tcx> Cx<'tcx> {
                     self.span(*fn_span),
                 ],
             ),
-            Assert { cond, expected, msg, target, unwind } => rocq::app(
+            Assert {
+                cond,
+                expected,
+                msg,
+                target,
+                unwind,
+            } => rocq::app(
                 "TAssert",
                 vec![
                     self.operand(cond),
@@ -459,7 +468,12 @@ impl<'tcx> Cx<'tcx> {
                     unwind_action(*unwind),
                 ],
             ),
-            Yield { value, resume, resume_arg, drop } => rocq::app(
+            Yield {
+                value,
+                resume,
+                resume_arg,
+                drop,
+            } => rocq::app(
                 "TYield",
                 vec![
                     self.operand(value),
@@ -469,11 +483,14 @@ impl<'tcx> Cx<'tcx> {
                 ],
             ),
             CoroutineDrop => rocq::atom("TCoroutineDrop"),
-            FalseEdge { real_target, imaginary_target } => rocq::app(
-                "TFalseEdge",
-                vec![bb(*real_target), bb(*imaginary_target)],
-            ),
-            FalseUnwind { real_target, unwind } => rocq::app(
+            FalseEdge {
+                real_target,
+                imaginary_target,
+            } => rocq::app("TFalseEdge", vec![bb(*real_target), bb(*imaginary_target)]),
+            FalseUnwind {
+                real_target,
+                unwind,
+            } => rocq::app(
                 "TFalseUnwind",
                 vec![bb(*real_target), unwind_action(*unwind)],
             ),
@@ -510,9 +527,10 @@ impl<'tcx> Cx<'tcx> {
     fn asm_operand(&self, o: &mir::InlineAsmOperand<'tcx>) -> Term {
         use mir::InlineAsmOperand::*;
         match o {
-            In { reg, value } => {
-                rocq::app("AoIn", vec![rocq::string(format!("{reg:?}")), self.operand(value)])
-            }
+            In { reg, value } => rocq::app(
+                "AoIn",
+                vec![rocq::string(format!("{reg:?}")), self.operand(value)],
+            ),
             Out { reg, late, place } => rocq::app(
                 "AoOut",
                 vec![
@@ -521,7 +539,12 @@ impl<'tcx> Cx<'tcx> {
                     rocq::option(place.as_ref().map(|p| self.place(p))),
                 ],
             ),
-            InOut { reg, late, in_value, out_place } => rocq::app(
+            InOut {
+                reg,
+                late,
+                in_value,
+                out_place,
+            } => rocq::app(
                 "AoInOut",
                 vec![
                     rocq::string(format!("{reg:?}")),
@@ -533,18 +556,17 @@ impl<'tcx> Cx<'tcx> {
             Const { value } => rocq::app("AoConst", vec![self.const_op(value)]),
             SymFn { value } => rocq::app("AoSymFn", vec![self.const_op(value)]),
             SymStatic { def_id } => rocq::app("AoSymStatic", vec![self.path(*def_id)]),
-            Label { target_index } => {
-                rocq::app("AoLabel", vec![rocq::nat(*target_index as u64)])
-            }
+            Label { target_index } => rocq::app("AoLabel", vec![rocq::nat(*target_index as u64)]),
         }
     }
 
     fn assert_kind(&self, k: &mir::AssertKind<mir::Operand<'tcx>>) -> Term {
         use mir::AssertKind::*;
         match k {
-            BoundsCheck { len, index } => {
-                rocq::app("AsBoundsCheck", vec![self.operand(len), self.operand(index)])
-            }
+            BoundsCheck { len, index } => rocq::app(
+                "AsBoundsCheck",
+                vec![self.operand(len), self.operand(index)],
+            ),
             Overflow(op, l, r) => rocq::app(
                 "AsOverflow",
                 vec![bin_op(*op), self.operand(l), self.operand(r)],
@@ -595,7 +617,10 @@ fn const_value(v: mir::ConstValue) -> Term {
         mir::ConstValue::ZeroSized => rocq::atom("CvZeroSized"),
         mir::ConstValue::Slice { alloc_id, meta } => rocq::app(
             "CvSlice",
-            vec![rocq::string(format!("{alloc_id:?}")), rocq::int(meta as i128)],
+            vec![
+                rocq::string(format!("{alloc_id:?}")),
+                rocq::int(meta as i128),
+            ],
         ),
         mir::ConstValue::Indirect { alloc_id, offset } => rocq::app(
             "CvIndirect",
@@ -611,10 +636,7 @@ fn scalar(s: mir::interpret::Scalar) -> Term {
     match s {
         mir::interpret::Scalar::Int(i) => rocq::app(
             "ScInt",
-            vec![
-                rocq::int(i.to_int(i.size())),
-                rocq::nat(i.size().bytes()),
-            ],
+            vec![rocq::int(i.to_int(i.size())), rocq::nat(i.size().bytes())],
         ),
         mir::interpret::Scalar::Ptr(p, size) => {
             let (prov, offset) = p.into_raw_parts();
@@ -782,9 +804,7 @@ fn unwind_action(u: mir::UnwindAction) -> Term {
     match u {
         mir::UnwindAction::Continue => rocq::atom("UaContinue"),
         mir::UnwindAction::Unreachable => rocq::atom("UaUnreachable"),
-        mir::UnwindAction::Terminate(r) => {
-            rocq::app("UaTerminate", vec![terminate_reason(r)])
-        }
+        mir::UnwindAction::Terminate(r) => rocq::app("UaTerminate", vec![terminate_reason(r)]),
         mir::UnwindAction::Cleanup(b) => rocq::app("UaCleanup", vec![bb(b)]),
     }
 }

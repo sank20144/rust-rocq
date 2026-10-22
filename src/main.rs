@@ -57,7 +57,10 @@ impl rustc_driver::Callbacks for Frontend {
         out.set_items(items.adts, items.traits, items.impls);
         out.set_build_flags(vec![
             ("overflow-checks", tcx.sess.overflow_checks().to_string()),
-            ("debug-assertions", tcx.sess.opts.debug_assertions.to_string()),
+            (
+                "debug-assertions",
+                tcx.sess.opts.debug_assertions.to_string(),
+            ),
             ("opt-level", format!("{:?}", tcx.sess.opts.optimize)),
         ]);
 
@@ -108,7 +111,10 @@ impl rustc_driver::Callbacks for Frontend {
         match out.write(&crate_name, &source) {
             Ok(path) => eprintln!("rust-rocq: wrote {}", path.display()),
             Err(e) => {
-                compiler.sess.dcx().fatal(format!("could not write output: {e}"));
+                compiler
+                    .sess
+                    .dcx()
+                    .fatal(format!("could not write output: {e}"));
             }
         }
 
@@ -155,9 +161,7 @@ fn without_incremental(args: Vec<String>) -> Vec<String> {
                 filtered.push(arg);
                 filtered.push(value);
             }
-        } else if arg.starts_with("-Cincremental=")
-            || arg.starts_with("--codegen=incremental=")
-        {
+        } else if arg.starts_with("-Cincremental=") || arg.starts_with("--codegen=incremental=") {
             continue;
         } else {
             filtered.push(arg);
