@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use polonius_engine::{Algorithm, Output};
 use rustc_borrowck::consumers::RichLocation;
 
-use crate::rocq::{self, Term};
 use crate::store::Facts;
+use crate::term::{self, Term};
 
 type Id = u32;
 
@@ -28,13 +28,13 @@ impl Point {
 
     fn term(self) -> Term {
         match self {
-            Self::Start(block, statement) => rocq::app(
+            Self::Start(block, statement) => term::app(
                 "PtStart",
-                vec![rocq::nat(block as u64), rocq::nat(statement as u64)],
+                vec![term::nat(block as u64), term::nat(statement as u64)],
             ),
-            Self::Mid(block, statement) => rocq::app(
+            Self::Mid(block, statement) => term::app(
                 "PtMid",
-                vec![rocq::nat(block as u64), rocq::nat(statement as u64)],
+                vec![term::nat(block as u64), term::nat(statement as u64)],
             ),
         }
     }
@@ -238,56 +238,56 @@ pub fn annotations(f: &Facts<'_>) -> Term {
     known_subsets.sort_unstable();
     known_subsets.dedup();
 
-    rocq::app(
+    term::app(
         "BorrowckAnnotations",
         vec![
-            rocq::note(
+            term::note(
                 "universal regions",
-                rocq::list(universal.into_iter().map(|n| rocq::nat(n as u64)).collect()),
+                term::list(universal.into_iter().map(|n| term::nat(n as u64)).collect()),
             ),
-            rocq::note(
+            term::note(
                 "placeholders",
-                rocq::list(
+                term::list(
                     placeholders
                         .into_iter()
-                        .map(|(o, l)| rocq::pair(rocq::nat(o as u64), rocq::nat(l as u64)))
+                        .map(|(o, l)| term::pair(term::nat(o as u64), term::nat(l as u64)))
                         .collect(),
                 ),
             ),
-            rocq::note(
+            term::note(
                 "known placeholder subsets",
-                rocq::list(
+                term::list(
                     known_subsets
                         .into_iter()
-                        .map(|(a, b)| rocq::pair(rocq::nat(a as u64), rocq::nat(b as u64)))
+                        .map(|(a, b)| term::pair(term::nat(a as u64), term::nat(b as u64)))
                         .collect(),
                 ),
             ),
-            rocq::note(
+            term::note(
                 "loan starts",
-                rocq::list(
+                term::list(
                     starts
                         .into_iter()
                         .map(|(origin, loan, at)| {
-                            rocq::app(
+                            term::app(
                                 "LoanStart",
-                                vec![rocq::nat(origin as u64), rocq::nat(loan as u64), at.term()],
+                                vec![term::nat(origin as u64), term::nat(loan as u64), at.term()],
                             )
                         })
                         .collect(),
                 ),
             ),
-            rocq::note(
+            term::note(
                 "loan ends",
-                rocq::list(
+                term::list(
                     ends.into_iter()
                         .map(|(loan, from, to)| {
-                            rocq::app(
+                            term::app(
                                 "LoanEnd",
                                 vec![
-                                    rocq::nat(loan as u64),
+                                    term::nat(loan as u64),
                                     from.term(),
-                                    rocq::option(to.map(Point::term)),
+                                    term::option(to.map(Point::term)),
                                 ],
                             )
                         })
@@ -299,14 +299,14 @@ pub fn annotations(f: &Facts<'_>) -> Term {
 }
 
 pub fn empty_annotations() -> Term {
-    rocq::app(
+    term::app(
         "BorrowckAnnotations",
         vec![
-            rocq::list(vec![]),
-            rocq::list(vec![]),
-            rocq::list(vec![]),
-            rocq::list(vec![]),
-            rocq::list(vec![]),
+            term::list(vec![]),
+            term::list(vec![]),
+            term::list(vec![]),
+            term::list(vec![]),
+            term::list(vec![]),
         ],
     )
 }

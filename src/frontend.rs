@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use rustc_driver::Compilation;
 use rustc_middle::ty::TyCtxt;
 
-use crate::{emit, items, polonius, store, ty};
+use crate::translator::Translator;
+use crate::{items, output, polonius, store};
 
 pub struct Frontend {
     pub out_dir: PathBuf,
@@ -29,10 +30,10 @@ impl rustc_driver::Callbacks for Frontend {
             return Compilation::Continue;
         }
 
-        let cx = ty::Cx::new(tcx);
-        let mut out = emit::Output::new(&self.out_dir);
+        let translator = Translator::new(tcx);
+        let mut out = output::Output::new(&self.out_dir);
 
-        let items = items::collect(&cx);
+        let items = items::collect(&translator);
         out.set_items(items.adts, items.traits, items.impls);
         out.set_build_flags(vec![
             ("overflow-checks", tcx.sess.overflow_checks().to_string()),
@@ -51,7 +52,7 @@ impl rustc_driver::Callbacks for Frontend {
             out.push_mir(&name, render_mir(tcx, &facts.body));
             out.push(
                 name.clone(),
-                cx.body(
+                translator.body(
                     def_id.to_def_id(),
                     &name,
                     &facts.body,
@@ -64,7 +65,7 @@ impl rustc_driver::Callbacks for Frontend {
                 out.push_mir(&pname, render_mir(tcx, promoted));
                 out.push(
                     pname.clone(),
-                    cx.body(
+                    translator.body(
                         def_id.to_def_id(),
                         &pname,
                         promoted,
@@ -74,7 +75,7 @@ impl rustc_driver::Callbacks for Frontend {
             }
         }
 
-        out.add_adts(items::external_adts(&cx));
+        out.add_adts(items::external_adts(&translator));
 
         if out.is_empty() {
             return self.finished();
@@ -84,7 +85,7 @@ impl rustc_driver::Callbacks for Frontend {
         let source = compiler
             .sess
             .local_crate_source_file()
-            .map(|f| emit::source_name(f.path(rustc_span::RemapPathScopeComponents::DIAGNOSTICS)))
+            .map(|f| output::source_name(f.path(rustc_span::RemapPathScopeComponents::DIAGNOSTICS)))
             .unwrap_or_else(|| "input".to_owned());
 
         match out.write(&crate_name, &source) {

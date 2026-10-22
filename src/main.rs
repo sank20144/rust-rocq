@@ -14,13 +14,14 @@ extern crate rustc_type_ir;
 
 mod arguments;
 mod body;
-mod emit;
 mod frontend;
 mod items;
+mod output;
 mod polonius;
-mod rocq;
 mod store;
-mod ty;
+mod term;
+mod translator;
+mod types;
 
 use std::path::PathBuf;
 use std::process::ExitCode;

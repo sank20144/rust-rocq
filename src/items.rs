@@ -2,8 +2,8 @@ use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty;
 
-use crate::rocq::{self, Term};
-use crate::ty::Cx;
+use crate::term::{self, Term};
+use crate::translator::Translator;
 
 pub struct Items {
     pub adts: Vec<Term>,
@@ -11,35 +11,37 @@ pub struct Items {
     pub impls: Vec<Term>,
 }
 
-pub fn collect(cx: &Cx<'_>) -> Items {
+pub fn collect(translator: &Translator<'_>) -> Items {
     let mut items = Items {
         adts: Vec::new(),
         traits: Vec::new(),
         impls: Vec::new(),
     };
 
-    let mut ids: Vec<_> = cx.tcx.hir_crate_items(()).definitions().collect();
+    let mut ids: Vec<_> = translator.tcx.hir_crate_items(()).definitions().collect();
     ids.sort_by_key(|id| id.local_def_index.as_u32());
 
     for local in ids {
         let def_id = local.to_def_id();
-        match cx.tcx.def_kind(local) {
-            DefKind::Struct | DefKind::Enum | DefKind::Union => items.adts.push(cx.adt_def(def_id)),
-            DefKind::Trait => items.traits.push(cx.trait_def(def_id)),
-            DefKind::Impl { of_trait: true } => items.impls.push(cx.impl_def(def_id)),
+        match translator.tcx.def_kind(local) {
+            DefKind::Struct | DefKind::Enum | DefKind::Union => {
+                items.adts.push(translator.adt_def(def_id))
+            }
+            DefKind::Trait => items.traits.push(translator.trait_def(def_id)),
+            DefKind::Impl { of_trait: true } => items.impls.push(translator.impl_def(def_id)),
             _ => {}
         }
     }
 
-    let _ = cx.take_regions();
+    let _ = translator.take_regions();
     items
 }
 
-pub fn external_adts(cx: &Cx<'_>) -> Vec<Term> {
+pub fn external_adts(translator: &Translator<'_>) -> Vec<Term> {
     let mut done: Vec<DefId> = Vec::new();
     let mut adts = Vec::new();
     loop {
-        let pending: Vec<DefId> = cx
+        let pending: Vec<DefId> = translator
             .adts_seen()
             .into_iter()
             .filter(|id| !id.is_local() && !done.contains(id))
@@ -49,14 +51,14 @@ pub fn external_adts(cx: &Cx<'_>) -> Vec<Term> {
         }
         for def_id in pending {
             done.push(def_id);
-            adts.push(cx.adt_def(def_id));
+            adts.push(translator.adt_def(def_id));
         }
     }
-    let _ = cx.take_regions();
+    let _ = translator.take_regions();
     adts
 }
 
-impl<'tcx> Cx<'tcx> {
+impl<'tcx> Translator<'tcx> {
     fn adt_def(&self, def_id: DefId) -> Term {
         let adt = self.tcx.adt_def(def_id);
         let kind = if adt.is_enum() {
@@ -81,16 +83,16 @@ impl<'tcx> Cx<'tcx> {
                     .iter()
                     .map(|f| {
                         let t = self.tcx.type_of(f.did).skip_binder();
-                        rocq::pair(rocq::string(f.name.to_string()), self.ty(t))
+                        term::pair(term::string(f.name.to_string()), self.ty(t))
                     })
                     .collect();
-                rocq::app(
+                term::app(
                     "VariantDef",
                     vec![
-                        rocq::string(v.name.to_string()),
-                        rocq::nat(idx.as_u32()),
-                        rocq::bits(discr),
-                        rocq::list(fields),
+                        term::string(v.name.to_string()),
+                        term::nat(idx.as_u32()),
+                        term::bits(discr),
+                        term::list(fields),
                     ],
                 )
             })
@@ -99,43 +101,43 @@ impl<'tcx> Cx<'tcx> {
         let repr = adt.repr();
         let mut reprs = Vec::new();
         if repr.c() {
-            reprs.push(rocq::string("C"));
+            reprs.push(term::string("C"));
         }
         if repr.transparent() {
-            reprs.push(rocq::string("transparent"));
+            reprs.push(term::string("transparent"));
         }
         if repr.packed() {
-            reprs.push(rocq::string("packed"));
+            reprs.push(term::string("packed"));
         }
         if let Some(int) = repr.int {
-            reprs.push(rocq::string(format!("{int:?}")));
+            reprs.push(term::string(format!("{int:?}")));
         }
 
-        rocq::note(
+        term::note(
             self.tcx.def_path_str(def_id),
-            rocq::app(
+            term::app(
                 "AdtDef",
                 vec![
-                    rocq::note("path", self.path(def_id)),
-                    rocq::note("kind", rocq::atom(kind)),
-                    rocq::note("generics", self.generics(def_id)),
-                    rocq::note("variants", rocq::list(variants)),
-                    rocq::note("repr", rocq::list(reprs)),
+                    term::note("path", self.path(def_id)),
+                    term::note("kind", term::atom(kind)),
+                    term::note("generics", self.generics(def_id)),
+                    term::note("variants", term::list(variants)),
+                    term::note("repr", term::list(reprs)),
                 ],
             ),
         )
     }
 
     fn trait_def(&self, def_id: DefId) -> Term {
-        rocq::note(
+        term::note(
             self.tcx.def_path_str(def_id),
-            rocq::app(
+            term::app(
                 "TraitDef",
                 vec![
-                    rocq::note("path", self.path(def_id)),
-                    rocq::note("generics", self.generics(def_id)),
-                    rocq::note("bounds", self.bounds(def_id)),
-                    rocq::note("items", rocq::list(self.assoc_items(def_id))),
+                    term::note("path", self.path(def_id)),
+                    term::note("generics", self.generics(def_id)),
+                    term::note("bounds", self.bounds(def_id)),
+                    term::note("items", term::list(self.assoc_items(def_id))),
                 ],
             ),
         )
@@ -151,22 +153,22 @@ impl<'tcx> Cx<'tcx> {
             .in_definition_order()
             .filter_map(|item| {
                 let of = item.trait_item_def_id()?;
-                Some(rocq::pair(self.path(of), self.path(item.def_id)))
+                Some(term::pair(self.path(of), self.path(item.def_id)))
             })
             .collect();
 
-        rocq::note(
+        term::note(
             self.tcx.def_path_str(def_id),
-            rocq::app(
+            term::app(
                 "ImplDef",
                 vec![
-                    rocq::note("path", self.path(def_id)),
-                    rocq::note("trait", self.path(trait_ref.def_id)),
-                    rocq::note("args", self.generic_args(trait_ref.args)),
-                    rocq::note("generics", self.generics(def_id)),
-                    rocq::note("bounds", self.bounds(def_id)),
-                    rocq::note("items", rocq::list(mapped)),
-                    rocq::note("negative", rocq::boolean(negative)),
+                    term::note("path", self.path(def_id)),
+                    term::note("trait", self.path(trait_ref.def_id)),
+                    term::note("args", self.generic_args(trait_ref.args)),
+                    term::note("generics", self.generics(def_id)),
+                    term::note("bounds", self.bounds(def_id)),
+                    term::note("items", term::list(mapped)),
+                    term::note("negative", term::boolean(negative)),
                 ],
             ),
         )
@@ -179,18 +181,18 @@ impl<'tcx> Cx<'tcx> {
             .map(|item| {
                 let kind = match item.kind {
                     ty::AssocKind::Fn { has_self, .. } => {
-                        rocq::app("AiFn", vec![rocq::boolean(has_self)])
+                        term::app("AiFn", vec![term::boolean(has_self)])
                     }
-                    ty::AssocKind::Const { .. } => rocq::atom("AiConst"),
-                    ty::AssocKind::Type { .. } => rocq::atom("AiType"),
+                    ty::AssocKind::Const { .. } => term::atom("AiConst"),
+                    ty::AssocKind::Type { .. } => term::atom("AiType"),
                 };
-                rocq::app(
+                term::app(
                     "AssocItem",
                     vec![
-                        rocq::string(item.opt_name().map_or_else(String::new, |n| n.to_string())),
+                        term::string(item.opt_name().map_or_else(String::new, |n| n.to_string())),
                         self.path(item.def_id),
                         kind,
-                        rocq::boolean(item.defaultness(self.tcx).has_value()),
+                        term::boolean(item.defaultness(self.tcx).has_value()),
                     ],
                 )
             })

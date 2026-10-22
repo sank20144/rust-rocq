@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::rocq::Term;
+use crate::term::Term;
 
 pub struct Output {
     pub dir: PathBuf,
