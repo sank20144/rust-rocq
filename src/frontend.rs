@@ -62,14 +62,14 @@ impl Callbacks for Frontend {
                 ),
             );
 
-            for (idx, promoted) in facts.promoted.iter_enumerated() {
-                let pname = format!("{name}::promoted[{}]", idx.as_u32());
-                out.push_mir(&pname, render_mir(tcx, promoted));
+            for (index, promoted) in facts.promoted.iter_enumerated() {
+                let promoted_name = format!("{name}::promoted[{}]", index.as_u32());
+                out.push_mir(&promoted_name, render_mir(tcx, promoted));
                 out.push(
-                    pname.clone(),
+                    promoted_name.clone(),
                     translator.body(
                         def_id.to_def_id(),
-                        &pname,
+                        &promoted_name,
                         promoted,
                         polonius::empty_annotations(),
                     ),
@@ -115,10 +115,10 @@ impl Frontend {
 }
 
 fn render_mir<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> String {
-    let mut buf = Vec::new();
+    let mut buffer = Vec::new();
     let writer = MirWriter::new(tcx);
-    match writer.write_mir_fn(body, &mut buf) {
-        Ok(()) => String::from_utf8_lossy(&buf).into_owned(),
+    match writer.write_mir_fn(body, &mut buffer) {
+        Ok(()) => String::from_utf8_lossy(&buffer).into_owned(),
         Err(e) => format!("// could not render: {e}\n"),
     }
 }

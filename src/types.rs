@@ -16,14 +16,14 @@ impl<'tcx> Translator<'tcx> {
             Uint(u) => term::app("TUint", vec![uint_width(*u)]),
             Float(f) => term::app("TFloat", vec![float_width(*f)]),
             Adt(def, args) => {
-                let did = def.did();
-                self.record_adt(did);
-                term::app("TAdt", vec![self.path(did), self.generic_args(args)])
+                let adt_id = def.did();
+                self.record_adt(adt_id);
+                term::app("TAdt", vec![self.path(adt_id), self.generic_args(args)])
             }
             Foreign(def_id) => term::app("TForeign", vec![self.path(*def_id)]),
             Str => term::atom("TStr"),
-            Array(elem, len) => term::app("TArray", vec![self.ty(*elem), self.tconst(*len)]),
-            Pat(base, pat) => term::app("TPat", vec![self.ty(*base), self.ty_pat(*pat)]),
+            Array(elem, len) => term::app("TArray", vec![self.ty(*elem), self.type_const(*len)]),
+            Pat(base, pat) => term::app("TPat", vec![self.ty(*base), self.pattern(*pat)]),
             Slice(elem) => term::app("TSlice", vec![self.ty(*elem)]),
             RawPtr(pointee, m) => term::app("TRawPtr", vec![self.ty(*pointee), mutability(*m)]),
             Ref(r, pointee, m) => term::app(
@@ -33,11 +33,14 @@ impl<'tcx> Translator<'tcx> {
             FnDef(def_id, args) => {
                 term::app("TFnDef", vec![self.path(*def_id), self.generic_args(args)])
             }
-            FnPtr(sig_tys, hdr) => term::app("TFnPtr", vec![self.fn_sig(*sig_tys, *hdr)]),
-            UnsafeBinder(b) => term::app("TUnsafeBinder", vec![self.ty(b.skip_binder())]),
-            Dynamic(preds, r) => {
-                term::app("TDynamic", vec![self.dyn_preds(preds), self.region(*r)])
+            FnPtr(signature, header) => {
+                term::app("TFnPtr", vec![self.fn_signature(*signature, *header)])
             }
+            UnsafeBinder(b) => term::app("TUnsafeBinder", vec![self.ty(b.skip_binder())]),
+            Dynamic(preds, r) => term::app(
+                "TDynamic",
+                vec![self.dyn_predicates(preds), self.region(*r)],
+            ),
             Closure(def_id, args) => term::app(
                 "TClosure",
                 vec![self.path(*def_id), self.generic_args(args)],
@@ -87,14 +90,15 @@ impl<'tcx> Translator<'tcx> {
         }
     }
 
-    fn ty_pat(&self, pat: ty::Pattern<'tcx>) -> Term {
+    fn pattern(&self, pat: ty::Pattern<'tcx>) -> Term {
         match &*pat {
-            ty::PatternKind::Range { start, end } => {
-                term::app("PatRange", vec![self.tconst(*start), self.tconst(*end)])
-            }
+            ty::PatternKind::Range { start, end } => term::app(
+                "PatRange",
+                vec![self.type_const(*start), self.type_const(*end)],
+            ),
             ty::PatternKind::Or(alts) => term::app(
                 "PatOr",
-                vec![term::list(alts.iter().map(|p| self.ty_pat(p)).collect())],
+                vec![term::list(alts.iter().map(|p| self.pattern(p)).collect())],
             ),
             ty::PatternKind::NotNull => term::atom("PatNotNull"),
         }
@@ -132,7 +136,7 @@ impl<'tcx> Translator<'tcx> {
         }
     }
 
-    pub fn tconst(&self, c: ty::Const<'tcx>) -> Term {
+    pub fn type_const(&self, c: ty::Const<'tcx>) -> Term {
         use rustc_middle::ty::ValTreeKindExt as _;
 
         match c.kind() {
@@ -185,32 +189,36 @@ impl<'tcx> Translator<'tcx> {
                 .map(|a| match a.kind() {
                     ty::GenericArgKind::Type(t) => term::app("GTy", vec![self.ty(t)]),
                     ty::GenericArgKind::Lifetime(r) => term::app("GLifetime", vec![self.region(r)]),
-                    ty::GenericArgKind::Const(c) => term::app("GConst", vec![self.tconst(c)]),
+                    ty::GenericArgKind::Const(c) => term::app("GConst", vec![self.type_const(c)]),
                 })
                 .collect(),
         )
     }
 
-    fn fn_sig(
+    fn fn_signature(
         &self,
-        sig_tys: ty::Binder<'tcx, ty::FnSigTys<TyCtxt<'tcx>>>,
-        hdr: ty::FnHeader<TyCtxt<'tcx>>,
+        signature: ty::Binder<'tcx, ty::FnSigTys<TyCtxt<'tcx>>>,
+        header: ty::FnHeader<TyCtxt<'tcx>>,
     ) -> Term {
-        let tys = sig_tys.skip_binder();
-        let inputs: Vec<Term> = tys.inputs().iter().map(|t| self.ty(*t)).collect();
+        let signature_types = signature.skip_binder();
+        let inputs: Vec<Term> = signature_types
+            .inputs()
+            .iter()
+            .map(|t| self.ty(*t))
+            .collect();
         term::app(
             "FnSig",
             vec![
                 term::list(inputs),
-                self.ty(tys.output()),
-                term::boolean(hdr.c_variadic()),
-                safety(hdr.safety()),
-                term::string(format!("{:?}", hdr.abi())),
+                self.ty(signature_types.output()),
+                term::boolean(header.c_variadic()),
+                safety(header.safety()),
+                term::string(format!("{:?}", header.abi())),
             ],
         )
     }
 
-    fn dyn_preds(&self, preds: &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>) -> Term {
+    fn dyn_predicates(&self, preds: &'tcx ty::List<ty::PolyExistentialPredicate<'tcx>>) -> Term {
         term::list(
             preds
                 .iter()
@@ -226,9 +234,10 @@ impl<'tcx> Translator<'tcx> {
                             self.generic_args(p.args),
                             match p.term.kind() {
                                 ty::TermKind::Ty(t) => self.ty(t),
-                                ty::TermKind::Const(c) => {
-                                    term::app("TError", vec![term::string(self.tconst(c).render())])
-                                }
+                                ty::TermKind::Const(c) => term::app(
+                                    "TError",
+                                    vec![term::string(self.type_const(c).render())],
+                                ),
                             },
                         ],
                     ),
@@ -241,8 +250,8 @@ impl<'tcx> Translator<'tcx> {
     }
 }
 
-fn error(msg: &str) -> Term {
-    term::app("TError", vec![term::string(msg)])
+fn error(message: &str) -> Term {
+    term::app("TError", vec![term::string(message)])
 }
 
 fn int_width(i: ty::IntTy) -> Term {

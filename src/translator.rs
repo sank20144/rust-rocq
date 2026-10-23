@@ -57,9 +57,11 @@ impl<'tcx> Translator<'tcx> {
     }
 
     pub fn span_file(&self, span: Span) -> String {
-        let sm = self.tcx.sess.source_map();
-        match sm.lookup_line(span.lo()) {
-            Ok(lo) => sm.filename_for_diagnostics(&lo.sf.name).to_string(),
+        let source_map = self.tcx.sess.source_map();
+        match source_map.lookup_line(span.lo()) {
+            Ok(start) => source_map
+                .filename_for_diagnostics(&start.sf.name)
+                .to_string(),
             Err(_) => String::new(),
         }
     }
@@ -68,19 +70,21 @@ impl<'tcx> Translator<'tcx> {
         if span.is_dummy() {
             return term::atom("NoSpan");
         }
-        let sm = self.tcx.sess.source_map();
-        let Ok(lo) = sm.lookup_line(span.lo()) else {
+        let source_map = self.tcx.sess.source_map();
+        let Ok(start) = source_map.lookup_line(span.lo()) else {
             return term::atom("NoSpan");
         };
-        let Ok(hi) = sm.lookup_line(span.hi()) else {
+        let Ok(end) = source_map.lookup_line(span.hi()) else {
             return term::atom("NoSpan");
         };
-        let file = sm.filename_for_diagnostics(&lo.sf.name).to_string();
+        let file = source_map
+            .filename_for_diagnostics(&start.sf.name)
+            .to_string();
         let mut args = vec![
-            term::nat(lo.line as u64 + 1),
-            term::nat(sm.lookup_char_pos(span.lo()).col_display as u64),
-            term::nat(hi.line as u64 + 1),
-            term::nat(sm.lookup_char_pos(span.hi()).col_display as u64),
+            term::nat(start.line as u64 + 1),
+            term::nat(source_map.lookup_char_pos(span.lo()).col_display as u64),
+            term::nat(end.line as u64 + 1),
+            term::nat(source_map.lookup_char_pos(span.hi()).col_display as u64),
         ];
         if file == *self.file.borrow() {
             term::app("Span", args)

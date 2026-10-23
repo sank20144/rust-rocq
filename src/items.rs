@@ -72,9 +72,9 @@ impl<'tcx> Translator<'tcx> {
         let variants: Vec<Term> = adt
             .variants()
             .iter_enumerated()
-            .map(|(idx, v)| {
-                let discr = if adt.is_enum() {
-                    adt.discriminant_for_variant(self.tcx, idx).val
+            .map(|(index, v)| {
+                let discriminant = if adt.is_enum() {
+                    adt.discriminant_for_variant(self.tcx, index).val
                 } else {
                     0
                 };
@@ -90,8 +90,8 @@ impl<'tcx> Translator<'tcx> {
                     "VariantDef",
                     vec![
                         term::string(v.name.to_string()),
-                        term::nat(idx.as_u32()),
-                        term::bits(discr),
+                        term::nat(index.as_u32()),
+                        term::bits(discriminant),
                         term::list(fields),
                     ],
                 )
@@ -137,7 +137,7 @@ impl<'tcx> Translator<'tcx> {
                     term::note("path", self.path(def_id)),
                     term::note("generics", self.generics(def_id)),
                     term::note("bounds", self.bounds(def_id)),
-                    term::note("items", term::list(self.assoc_items(def_id))),
+                    term::note("items", term::list(self.associated_items(def_id))),
                 ],
             ),
         )
@@ -152,8 +152,8 @@ impl<'tcx> Translator<'tcx> {
             .associated_items(def_id)
             .in_definition_order()
             .filter_map(|item| {
-                let of = item.trait_item_def_id()?;
-                Some(term::pair(self.path(of), self.path(item.def_id)))
+                let trait_item = item.trait_item_def_id()?;
+                Some(term::pair(self.path(trait_item), self.path(item.def_id)))
             })
             .collect();
 
@@ -174,7 +174,7 @@ impl<'tcx> Translator<'tcx> {
         )
     }
 
-    fn assoc_items(&self, def_id: DefId) -> Vec<Term> {
+    fn associated_items(&self, def_id: DefId) -> Vec<Term> {
         self.tcx
             .associated_items(def_id)
             .in_definition_order()

@@ -58,7 +58,7 @@ impl Output {
 
     pub fn write(mut self, crate_name: &str, source: &str) -> io::Result<PathBuf> {
         fs::create_dir_all(&self.dir)?;
-        let path = self.dir.join(format!("{}.v", ident(crate_name)));
+        let path = self.dir.join(format!("{}.v", identifier(crate_name)));
 
         let mut constructors = BTreeSet::new();
         for term in &self.adts {
@@ -108,19 +108,19 @@ impl Output {
             impls.render_at(2)
         ));
 
-        let mut idents = Vec::new();
+        let mut identifiers = Vec::new();
         for (name, body) in &self.entries {
-            let id = unique(&ident(name), &idents);
+            let definition_name = unique(&identifier(name), &identifiers);
             out.push_str(&format!(
-                "Definition {id} : body :=\n  {}.\n\n",
+                "Definition {definition_name} : body :=\n  {}.\n\n",
                 body.render_at(2)
             ));
-            idents.push(id);
+            identifiers.push(definition_name);
         }
 
         out.push_str(&format!(
             "Definition bodies : list body := [{}].\n",
-            idents.join("; ")
+            identifiers.join("; ")
         ));
 
         fs::write(&path, out)?;
@@ -154,7 +154,7 @@ impl Output {
     }
 }
 
-fn ident(path: &str) -> String {
+fn identifier(path: &str) -> String {
     let mut s: String = path
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
@@ -191,9 +191,9 @@ mod tests {
 
     #[test]
     fn paths_become_identifiers() {
-        assert_eq!(ident("simple::add"), "simple_add");
-        assert_eq!(ident("<Foo as Bar>::baz"), "Foo_as_Bar_baz");
-        assert_eq!(ident("9lives"), "item_9lives");
+        assert_eq!(identifier("simple::add"), "simple_add");
+        assert_eq!(identifier("<Foo as Bar>::baz"), "Foo_as_Bar_baz");
+        assert_eq!(identifier("9lives"), "item_9lives");
     }
 
     #[test]

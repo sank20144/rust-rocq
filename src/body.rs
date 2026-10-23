@@ -38,18 +38,18 @@ impl<'tcx> Translator<'tcx> {
         let blocks: Vec<Term> = body
             .basic_blocks
             .iter_enumerated()
-            .map(|(bb, data)| {
+            .map(|(block, data)| {
                 let label = if data.is_cleanup {
-                    format!("bb{} (cleanup)", bb.as_u32())
+                    format!("bb{} (cleanup)", block.as_u32())
                 } else {
-                    format!("bb{}", bb.as_u32())
+                    format!("bb{}", block.as_u32())
                 };
                 term::note(
                     label,
                     term::app(
                         "BasicBlock",
                         vec![
-                            term::nat(bb.as_u32() as u64),
+                            term::nat(block.as_u32() as u64),
                             term::list(data.statements.iter().map(|s| self.statement(s)).collect()),
                             match &data.terminator {
                                 Some(t) => self.terminator(t),
@@ -92,14 +92,22 @@ impl<'tcx> Translator<'tcx> {
                 .own_params
                 .iter()
                 .map(|p| {
-                    let idx = term::nat(p.index as u64);
-                    let nm = term::string(p.name.to_string());
+                    let index = term::nat(p.index as u64);
+                    let name = term::string(p.name.to_string());
                     match p.kind {
-                        ty::GenericParamDefKind::Lifetime => term::app("GpLifetime", vec![idx, nm]),
-                        ty::GenericParamDefKind::Type { .. } => term::app("GpTy", vec![idx, nm]),
+                        ty::GenericParamDefKind::Lifetime => {
+                            term::app("GpLifetime", vec![index, name])
+                        }
+                        ty::GenericParamDefKind::Type { .. } => {
+                            term::app("GpTy", vec![index, name])
+                        }
                         ty::GenericParamDefKind::Const { .. } => term::app(
                             "GpConst",
-                            vec![idx, nm, self.ty(self.tcx.type_of(p.def_id).skip_binder())],
+                            vec![
+                                index,
+                                name,
+                                self.ty(self.tcx.type_of(p.def_id).skip_binder()),
+                            ],
                         ),
                     }
                 })
@@ -132,7 +140,7 @@ impl<'tcx> Translator<'tcx> {
                     match p.term.kind() {
                         ty::TermKind::Ty(t) => self.ty(t),
                         ty::TermKind::Const(c) => {
-                            term::app("TError", vec![term::string(self.tconst(c).render())])
+                            term::app("TError", vec![term::string(self.type_const(c).render())])
                         }
                     },
                 ],
@@ -144,14 +152,14 @@ impl<'tcx> Translator<'tcx> {
                 term::app("BdTyOutlives", vec![self.ty(o.0), self.region(o.1)])
             }
             ty::ClauseKind::ConstArgHasType(c, t) => {
-                term::app("BdConstArgHasType", vec![self.tconst(c), self.ty(t)])
+                term::app("BdConstArgHasType", vec![self.type_const(c), self.ty(t)])
             }
             ty::ClauseKind::WellFormed(term) => match term.kind() {
                 ty::TermKind::Ty(t) => term::app("BdWellFormedTy", vec![self.ty(t)]),
-                ty::TermKind::Const(c) => term::app("BdWellFormedConst", vec![self.tconst(c)]),
+                ty::TermKind::Const(c) => term::app("BdWellFormedConst", vec![self.type_const(c)]),
             },
             ty::ClauseKind::ConstEvaluatable(c) => {
-                term::app("BdConstEvaluatable", vec![self.tconst(c)])
+                term::app("BdConstEvaluatable", vec![self.type_const(c)])
             }
             ty::ClauseKind::HostEffect(h) => term::app(
                 "BdHostEffect",
@@ -172,16 +180,23 @@ impl<'tcx> Translator<'tcx> {
             "Place",
             vec![
                 term::nat(p.local.as_u32() as u64),
-                term::list(p.projection.iter().map(|e| self.proj_elem(e)).collect()),
+                term::list(
+                    p.projection
+                        .iter()
+                        .map(|e| self.projection_element(e))
+                        .collect(),
+                ),
             ],
         )
     }
 
-    fn proj_elem(&self, e: mir::PlaceElem<'tcx>) -> Term {
+    fn projection_element(&self, e: mir::PlaceElem<'tcx>) -> Term {
         use mir::ProjectionElem::*;
         match e {
             Deref => term::atom("PDeref"),
-            Field(idx, t) => term::app("PField", vec![term::nat(idx.as_u32() as u64), self.ty(t)]),
+            Field(index, t) => {
+                term::app("PField", vec![term::nat(index.as_u32() as u64), self.ty(t)])
+            }
             Index(l) => term::app("PIndex", vec![term::nat(l.as_u32() as u64)]),
             ConstantIndex {
                 offset,
@@ -199,10 +214,10 @@ impl<'tcx> Translator<'tcx> {
                 "PSubslice",
                 vec![term::nat(from), term::nat(to), term::boolean(from_end)],
             ),
-            Downcast(nm, v) => term::app(
+            Downcast(name, v) => term::app(
                 "PDowncast",
                 vec![
-                    term::option(nm.map(|s| term::string(s.to_string()))),
+                    term::option(name.map(|s| term::string(s.to_string()))),
                     term::nat(v.as_u32() as u64),
                 ],
             ),
@@ -215,7 +230,7 @@ impl<'tcx> Translator<'tcx> {
         match o {
             mir::Operand::Copy(p) => term::app("OCopy", vec![self.place(p)]),
             mir::Operand::Move(p) => term::app("OMove", vec![self.place(p)]),
-            mir::Operand::Constant(c) => term::app("OConst", vec![self.const_op(c)]),
+            mir::Operand::Constant(c) => term::app("OConst", vec![self.const_operand(c)]),
             mir::Operand::RuntimeChecks(c) => term::app(
                 "ORuntimeCheck",
                 vec![term::atom(match c {
@@ -227,13 +242,13 @@ impl<'tcx> Translator<'tcx> {
         }
     }
 
-    fn const_op(&self, c: &mir::ConstOperand<'tcx>) -> Term {
+    fn const_operand(&self, c: &mir::ConstOperand<'tcx>) -> Term {
         term::app("ConstOp", vec![self.span(c.span), self.constant(c.const_)])
     }
 
     fn constant(&self, c: mir::Const<'tcx>) -> Term {
         match c {
-            mir::Const::Ty(t, k) => term::app("KTy", vec![self.ty(t), self.tconst(k)]),
+            mir::Const::Ty(t, k) => term::app("KTy", vec![self.ty(t), self.type_const(k)]),
             mir::Const::Unevaluated(u, t) => term::app(
                 "KUnevaluated",
                 vec![
@@ -260,19 +275,19 @@ impl<'tcx> Translator<'tcx> {
                     }),
                 ],
             ),
-            Repeat(o, n) => term::app("RRepeat", vec![self.operand(o), self.tconst(*n)]),
-            Ref(r, bk, p) => term::app(
+            Repeat(o, n) => term::app("RRepeat", vec![self.operand(o), self.type_const(*n)]),
+            Ref(r, borrow, p) => term::app(
                 "RRef",
-                vec![self.region(*r), borrow_kind(*bk), self.place(p)],
+                vec![self.region(*r), borrow_kind(*borrow), self.place(p)],
             ),
             ThreadLocalRef(def_id) => term::app("RThreadLocalRef", vec![self.path(*def_id)]),
             RawPtr(k, p) => term::app("RRawPtr", vec![raw_ptr_kind(*k), self.place(p)]),
             Cast(k, o, t) => term::app("RCast", vec![cast_kind(*k), self.operand(o), self.ty(*t)]),
             BinaryOp(op, args) => term::app(
                 "RBinaryOp",
-                vec![bin_op(*op), self.operand(&args.0), self.operand(&args.1)],
+                vec![binary_op(*op), self.operand(&args.0), self.operand(&args.1)],
             ),
-            UnaryOp(op, o) => term::app("RUnaryOp", vec![un_op(*op), self.operand(o)]),
+            UnaryOp(op, o) => term::app("RUnaryOp", vec![unary_op(*op), self.operand(o)]),
             Discriminant(p) => term::app("RDiscriminant", vec![self.place(p)]),
             Aggregate(k, fields) => term::app(
                 "RAggregate",
@@ -344,16 +359,16 @@ impl<'tcx> Translator<'tcx> {
             StorageLive(l) => term::app("SStorageLive", vec![term::nat(l.as_u32() as u64)]),
             StorageDead(l) => term::app("SStorageDead", vec![term::nat(l.as_u32() as u64)]),
             PlaceMention(p) => term::app("SPlaceMention", vec![self.place(p)]),
-            AscribeUserType(b, var) => term::app(
+            AscribeUserType(b, kind) => term::app(
                 "SAscribeUserType",
                 vec![
                     self.place(&b.0),
                     term::string(format!("{:?}", b.1)),
-                    variance(*var),
+                    variance(*kind),
                 ],
             ),
             Coverage(kind) => term::app("SCoverage", vec![term::string(format!("{kind:?}"))]),
-            Intrinsic(i) => term::app("SIntrinsic", vec![self.nd_intrinsic(i)]),
+            Intrinsic(i) => term::app("SIntrinsic", vec![self.non_diverging_intrinsic(i)]),
             ConstEvalCounter => term::atom("SConstEvalCounter"),
             Nop => term::atom("SNop"),
             BackwardIncompatibleDropHint { place, reason } => term::app(
@@ -363,7 +378,7 @@ impl<'tcx> Translator<'tcx> {
         }
     }
 
-    fn nd_intrinsic(&self, i: &mir::NonDivergingIntrinsic<'tcx>) -> Term {
+    fn non_diverging_intrinsic(&self, i: &mir::NonDivergingIntrinsic<'tcx>) -> Term {
         match i {
             mir::NonDivergingIntrinsic::Assume(o) => term::app("NiAssume", vec![self.operand(o)]),
             mir::NonDivergingIntrinsic::CopyNonOverlapping(c) => term::app(
@@ -387,18 +402,21 @@ impl<'tcx> Translator<'tcx> {
     fn terminator_kind(&self, k: &mir::TerminatorKind<'tcx>) -> Term {
         use mir::TerminatorKind::*;
         match k {
-            Goto { target } => term::app("TGoto", vec![bb(*target)]),
-            SwitchInt { discr, targets } => term::app(
+            Goto { target } => term::app("TGoto", vec![basic_block(*target)]),
+            SwitchInt {
+                discr: discriminant,
+                targets,
+            } => term::app(
                 "TSwitchInt",
                 vec![
-                    self.operand(discr),
+                    self.operand(discriminant),
                     term::list(
                         targets
                             .iter()
-                            .map(|(v, t)| term::pair(term::bits(v), bb(t)))
+                            .map(|(v, t)| term::pair(term::bits(v), basic_block(t)))
                             .collect(),
                     ),
-                    bb(targets.otherwise()),
+                    basic_block(targets.otherwise()),
                 ],
             ),
             UnwindResume => term::atom("TUnwindResume"),
@@ -415,10 +433,10 @@ impl<'tcx> Translator<'tcx> {
                 "TDrop",
                 vec![
                     self.place(place),
-                    bb(*target),
+                    basic_block(*target),
                     unwind_action(*unwind),
                     term::boolean(*replace),
-                    term::option(drop.map(bb)),
+                    term::option(drop.map(basic_block)),
                 ],
             ),
             Call {
@@ -435,7 +453,7 @@ impl<'tcx> Translator<'tcx> {
                     self.operand(func),
                     term::list(args.iter().map(|a| self.operand(&a.node)).collect()),
                     self.place(destination),
-                    term::option(target.map(bb)),
+                    term::option(target.map(basic_block)),
                     unwind_action(*unwind),
                     call_source_term(*call_source),
                     self.span(*fn_span),
@@ -456,7 +474,7 @@ impl<'tcx> Translator<'tcx> {
             Assert {
                 cond,
                 expected,
-                msg,
+                msg: message,
                 target,
                 unwind,
             } => term::app(
@@ -464,8 +482,8 @@ impl<'tcx> Translator<'tcx> {
                 vec![
                     self.operand(cond),
                     term::boolean(*expected),
-                    self.assert_kind(msg),
-                    bb(*target),
+                    self.assert_kind(message),
+                    basic_block(*target),
                     unwind_action(*unwind),
                 ],
             ),
@@ -478,22 +496,25 @@ impl<'tcx> Translator<'tcx> {
                 "TYield",
                 vec![
                     self.operand(value),
-                    bb(*resume),
+                    basic_block(*resume),
                     self.place(resume_arg),
-                    term::option(drop.map(bb)),
+                    term::option(drop.map(basic_block)),
                 ],
             ),
             CoroutineDrop => term::atom("TCoroutineDrop"),
             FalseEdge {
                 real_target,
                 imaginary_target,
-            } => term::app("TFalseEdge", vec![bb(*real_target), bb(*imaginary_target)]),
+            } => term::app(
+                "TFalseEdge",
+                vec![basic_block(*real_target), basic_block(*imaginary_target)],
+            ),
             FalseUnwind {
                 real_target,
                 unwind,
             } => term::app(
                 "TFalseUnwind",
-                vec![bb(*real_target), unwind_action(*unwind)],
+                vec![basic_block(*real_target), unwind_action(*unwind)],
             ),
             InlineAsm {
                 asm_macro,
@@ -518,7 +539,7 @@ impl<'tcx> Translator<'tcx> {
                     ),
                     term::list(operands.iter().map(|o| self.asm_operand(o)).collect()),
                     term::list(vec![term::string(format!("{options:?}"))]),
-                    term::list(targets.iter().map(|t| bb(*t)).collect()),
+                    term::list(targets.iter().map(|t| basic_block(*t)).collect()),
                     unwind_action(*unwind),
                 ],
             ),
@@ -554,8 +575,8 @@ impl<'tcx> Translator<'tcx> {
                     term::option(out_place.as_ref().map(|p| self.place(p))),
                 ],
             ),
-            Const { value } => term::app("AoConst", vec![self.const_op(value)]),
-            SymFn { value } => term::app("AoSymFn", vec![self.const_op(value)]),
+            Const { value } => term::app("AoConst", vec![self.const_operand(value)]),
+            SymFn { value } => term::app("AoSymFn", vec![self.const_operand(value)]),
             SymStatic { def_id } => term::app("AoSymStatic", vec![self.path(*def_id)]),
             Label { target_index } => term::app("AoLabel", vec![term::nat(*target_index as u64)]),
         }
@@ -570,7 +591,7 @@ impl<'tcx> Translator<'tcx> {
             ),
             Overflow(op, l, r) => term::app(
                 "AsOverflow",
-                vec![bin_op(*op), self.operand(l), self.operand(r)],
+                vec![binary_op(*op), self.operand(l), self.operand(r)],
             ),
             OverflowNeg(o) => term::app("AsOverflowNeg", vec![self.operand(o)]),
             DivisionByZero(o) => term::app("AsDivisionByZero", vec![self.operand(o)]),
@@ -608,7 +629,7 @@ fn debug_names(body: &mir::Body<'_>) -> BTreeMap<mir::Local, String> {
     out
 }
 
-fn bb(b: mir::BasicBlock) -> Term {
+fn basic_block(b: mir::BasicBlock) -> Term {
     term::nat(b.as_u32() as u64)
 }
 
@@ -640,11 +661,11 @@ fn scalar(s: mir::interpret::Scalar) -> Term {
             vec![term::int(i.to_int(i.size())), term::nat(i.size().bytes())],
         ),
         mir::interpret::Scalar::Ptr(p, size) => {
-            let (prov, offset) = p.into_raw_parts();
+            let (provenance, offset) = p.into_raw_parts();
             term::app(
                 "ScPtr",
                 vec![
-                    term::string(format!("{prov:?}")),
+                    term::string(format!("{provenance:?}")),
                     term::int(offset.bytes() as i128),
                     term::nat(size),
                 ],
@@ -653,8 +674,8 @@ fn scalar(s: mir::interpret::Scalar) -> Term {
     }
 }
 
-fn borrow_kind(bk: mir::BorrowKind) -> Term {
-    match bk {
+fn borrow_kind(borrow: mir::BorrowKind) -> Term {
+    match borrow {
         mir::BorrowKind::Shared => term::atom("BkShared"),
         mir::BorrowKind::Fake(k) => term::app(
             "BkFake",
@@ -687,9 +708,9 @@ fn cast_kind(k: mir::CastKind) -> Term {
     match k {
         PointerExposeProvenance => term::atom("CkPointerExposeProvenance"),
         PointerWithExposedProvenance => term::atom("CkPointerWithExposedProvenance"),
-        PointerCoercion(pc, src) => term::app(
+        PointerCoercion(coercion, source) => term::app(
             "CkPointerCoercion",
-            vec![pointer_coercion(pc), coercion_source(src)],
+            vec![pointer_coercion(coercion), coercion_source(source)],
         ),
         IntToInt => term::atom("CkIntToInt"),
         FloatToInt => term::atom("CkFloatToInt"),
@@ -702,9 +723,9 @@ fn cast_kind(k: mir::CastKind) -> Term {
     }
 }
 
-fn pointer_coercion(pc: ty::adjustment::PointerCoercion) -> Term {
+fn pointer_coercion(coercion: ty::adjustment::PointerCoercion) -> Term {
     use ty::adjustment::PointerCoercion::*;
-    match pc {
+    match coercion {
         ReifyFnPointer(s) => term::app("PcReifyFnPointer", vec![types::safety(s)]),
         UnsafeFnPointer => term::atom("PcUnsafeFnPointer"),
         ClosureFnPointer(s) => term::app("PcClosureFnPointer", vec![types::safety(s)]),
@@ -721,7 +742,7 @@ fn coercion_source(s: mir::CoercionSource) -> Term {
     })
 }
 
-fn bin_op(op: mir::BinOp) -> Term {
+fn binary_op(op: mir::BinOp) -> Term {
     use mir::BinOp::*;
     term::atom(match op {
         Add => "BAdd",
@@ -753,7 +774,7 @@ fn bin_op(op: mir::BinOp) -> Term {
     })
 }
 
-fn un_op(op: mir::UnOp) -> Term {
+fn unary_op(op: mir::UnOp) -> Term {
     term::atom(match op {
         mir::UnOp::Not => "UNot",
         mir::UnOp::Neg => "UNeg",
@@ -799,7 +820,7 @@ fn unwind_action(u: mir::UnwindAction) -> Term {
         mir::UnwindAction::Continue => term::atom("UaContinue"),
         mir::UnwindAction::Unreachable => term::atom("UaUnreachable"),
         mir::UnwindAction::Terminate(r) => term::app("UaTerminate", vec![terminate_reason(r)]),
-        mir::UnwindAction::Cleanup(b) => term::app("UaCleanup", vec![bb(b)]),
+        mir::UnwindAction::Cleanup(b) => term::app("UaCleanup", vec![basic_block(b)]),
     }
 }
 

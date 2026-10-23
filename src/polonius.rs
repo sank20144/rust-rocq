@@ -143,8 +143,9 @@ fn id(value: impl Into<u32>) -> Id {
     value.into()
 }
 
-pub fn annotations(f: &Facts<'_>) -> Term {
-    let (Some(input), Some(table)) = (f.input_facts.as_deref(), f.location_table.as_ref()) else {
+pub fn annotations(facts: &Facts<'_>) -> Term {
+    let (Some(input), Some(table)) = (facts.input_facts.as_deref(), facts.location_table.as_ref())
+    else {
         return empty_annotations();
     };
 
