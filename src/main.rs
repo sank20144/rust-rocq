@@ -23,20 +23,21 @@ mod term;
 mod translator;
 mod types;
 
+use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use frontend::Frontend;
 
 fn main() -> ExitCode {
-    let mut args: Vec<String> = std::env::args().collect();
-    let cargo_mode = std::env::var_os("RUST_ROCQ_CARGO_MODE").is_some();
-    let include_deps = std::env::var_os("RUST_ROCQ_INCLUDE_DEPS").is_some();
-    let is_primary_package = std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some();
+    let mut args: Vec<String> = env::args().collect();
+    let cargo_mode = env::var_os("RUST_ROCQ_CARGO_MODE").is_some();
+    let include_deps = env::var_os("RUST_ROCQ_INCLUDE_DEPS").is_some();
+    let is_primary_package = env::var_os("CARGO_PRIMARY_PACKAGE").is_some();
     let translate = !cargo_mode || include_deps || is_primary_package;
 
     let mut out_dir =
-        std::env::var_os("RUST_ROCQ_OUT").map_or_else(|| PathBuf::from("out"), PathBuf::from);
+        env::var_os("RUST_ROCQ_OUT").map_or_else(|| PathBuf::from("out"), PathBuf::from);
     if let Some(i) = args.iter().position(|a| a == "--rocq-out") {
         if i + 1 < args.len() {
             out_dir = PathBuf::from(args.remove(i + 1));

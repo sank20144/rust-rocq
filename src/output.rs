@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::{fs, io, mem};
 
 use crate::term::Term;
 
@@ -55,8 +56,8 @@ impl Output {
         self.flags = flags;
     }
 
-    pub fn write(mut self, crate_name: &str, source: &str) -> std::io::Result<PathBuf> {
-        std::fs::create_dir_all(&self.dir)?;
+    pub fn write(mut self, crate_name: &str, source: &str) -> io::Result<PathBuf> {
+        fs::create_dir_all(&self.dir)?;
         let path = self.dir.join(format!("{}.v", ident(crate_name)));
 
         let mut constructors = BTreeSet::new();
@@ -91,9 +92,9 @@ impl Output {
         ));
         let _ = source;
 
-        let adts = Term::List(std::mem::take(&mut self.adts));
-        let traits = Term::List(std::mem::take(&mut self.traits));
-        let impls = Term::List(std::mem::take(&mut self.impls));
+        let adts = Term::List(mem::take(&mut self.adts));
+        let traits = Term::List(mem::take(&mut self.traits));
+        let impls = Term::List(mem::take(&mut self.impls));
         out.push_str(&format!(
             "Definition adts : list adt_def :=\n  {}.\n\n",
             adts.render_at(2)
@@ -122,10 +123,10 @@ impl Output {
             idents.join("; ")
         ));
 
-        std::fs::write(&path, out)?;
+        fs::write(&path, out)?;
 
         let mir_path = path.with_extension("mir");
-        std::fs::write(
+        fs::write(
             &mir_path,
             format!(
                 "// MIR at Analysis(Initial) for {source}, as translated into {}.\n\
@@ -140,14 +141,14 @@ impl Output {
         if !constructs.is_empty() {
             constructs.push('\n');
         }
-        std::fs::write(constructs_path, constructs)?;
+        fs::write(constructs_path, constructs)?;
 
         let bodies_path = path.with_extension("bodies");
         let mut bodies = body_names.join("\n");
         if !bodies.is_empty() {
             bodies.push('\n');
         }
-        std::fs::write(bodies_path, bodies)?;
+        fs::write(bodies_path, bodies)?;
 
         Ok(path)
     }

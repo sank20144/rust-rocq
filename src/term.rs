@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::fmt::Write as _;
+use std::iter;
 
 const WIDTH: usize = 96;
 
@@ -138,6 +138,8 @@ impl Term {
     }
 
     fn write_flat(&self, out: &mut String, nested: bool) {
+        use std::fmt::Write as _;
+
         match self {
             Term::Atom(s) => out.push_str(s),
             Term::App(head, args) => {
@@ -193,6 +195,8 @@ impl Term {
     }
 
     fn write_broken(&self, out: &mut String, indent: usize, nested: bool) {
+        use std::fmt::Write as _;
+
         let inner = indent + 2;
         match self {
             Term::App(head, args) => {
@@ -263,7 +267,7 @@ impl Term {
 }
 
 fn pad(out: &mut String, n: usize) {
-    out.extend(std::iter::repeat_n(' ', n));
+    out.extend(iter::repeat_n(' ', n));
 }
 
 fn write_string(out: &mut String, s: &str) {

@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::mem;
 
+use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 
@@ -10,7 +12,7 @@ pub struct Translator<'tcx> {
     pub tcx: TyCtxt<'tcx>,
     regions: RefCell<BTreeSet<u32>>,
     file: RefCell<String>,
-    adts_seen: RefCell<Vec<rustc_hir::def_id::DefId>>,
+    adts_seen: RefCell<Vec<DefId>>,
 }
 
 impl<'tcx> Translator<'tcx> {
@@ -24,15 +26,15 @@ impl<'tcx> Translator<'tcx> {
     }
 
     pub fn take_regions(&self) -> Vec<u64> {
-        let taken = std::mem::take(&mut *self.regions.borrow_mut());
+        let taken = mem::take(&mut *self.regions.borrow_mut());
         taken.into_iter().map(u64::from).collect()
     }
 
-    pub fn adts_seen(&self) -> Vec<rustc_hir::def_id::DefId> {
+    pub fn adts_seen(&self) -> Vec<DefId> {
         self.adts_seen.borrow().clone()
     }
 
-    pub fn record_adt(&self, def_id: rustc_hir::def_id::DefId) {
+    pub fn record_adt(&self, def_id: DefId) {
         if !self.adts_seen.borrow().contains(&def_id) {
             self.adts_seen.borrow_mut().push(def_id);
         }
@@ -42,7 +44,7 @@ impl<'tcx> Translator<'tcx> {
         self.regions.borrow_mut().insert(region);
     }
 
-    pub fn path(&self, def_id: rustc_hir::def_id::DefId) -> Term {
+    pub fn path(&self, def_id: DefId) -> Term {
         term::string(self.tcx.def_path_str(def_id))
     }
 

@@ -1,8 +1,14 @@
 use std::path::PathBuf;
 
-use rustc_driver::Compilation;
+use rustc_driver::{Callbacks, Compilation};
+use rustc_hir::def_id::LOCAL_CRATE;
+use rustc_interface::interface::{Compiler, Config};
+use rustc_middle::mir::pretty::MirWriter;
+use rustc_middle::mir::Body;
 use rustc_middle::ty::TyCtxt;
+use rustc_span::RemapPathScopeComponents;
 
+use crate::output::Output;
 use crate::translator::Translator;
 use crate::{items, output, polonius, store};
 
@@ -12,8 +18,8 @@ pub struct Frontend {
     pub continue_compilation: bool,
 }
 
-impl rustc_driver::Callbacks for Frontend {
-    fn config(&mut self, config: &mut rustc_interface::interface::Config) {
+impl Callbacks for Frontend {
+    fn config(&mut self, config: &mut Config) {
         if self.translate {
             config.override_queries = Some(|_sess, providers| {
                 providers.queries.mir_borrowck = store::mir_borrowck;
@@ -21,17 +27,13 @@ impl rustc_driver::Callbacks for Frontend {
         }
     }
 
-    fn after_analysis(
-        &mut self,
-        compiler: &rustc_interface::interface::Compiler,
-        tcx: TyCtxt<'_>,
-    ) -> Compilation {
+    fn after_analysis(&mut self, compiler: &Compiler, tcx: TyCtxt<'_>) -> Compilation {
         if !self.translate {
             return Compilation::Continue;
         }
 
         let translator = Translator::new(tcx);
-        let mut out = output::Output::new(&self.out_dir);
+        let mut out = Output::new(&self.out_dir);
 
         let items = items::collect(&translator);
         out.set_items(items.adts, items.traits, items.impls);
@@ -81,11 +83,11 @@ impl rustc_driver::Callbacks for Frontend {
             return self.finished();
         }
 
-        let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE).to_string();
+        let crate_name = tcx.crate_name(LOCAL_CRATE).to_string();
         let source = compiler
             .sess
             .local_crate_source_file()
-            .map(|f| output::source_name(f.path(rustc_span::RemapPathScopeComponents::DIAGNOSTICS)))
+            .map(|f| output::source_name(f.path(RemapPathScopeComponents::DIAGNOSTICS)))
             .unwrap_or_else(|| "input".to_owned());
 
         match out.write(&crate_name, &source) {
@@ -112,9 +114,9 @@ impl Frontend {
     }
 }
 
-fn render_mir<'tcx>(tcx: TyCtxt<'tcx>, body: &rustc_middle::mir::Body<'tcx>) -> String {
+fn render_mir<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> String {
     let mut buf = Vec::new();
-    let writer = rustc_middle::mir::pretty::MirWriter::new(tcx);
+    let writer = MirWriter::new(tcx);
     match writer.write_mir_fn(body, &mut buf) {
         Ok(()) => String::from_utf8_lossy(&buf).into_owned(),
         Err(e) => format!("// could not render: {e}\n"),

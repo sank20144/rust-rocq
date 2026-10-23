@@ -1,5 +1,7 @@
-use rustc_middle::ty::{self, Ty, TyCtxt, ValTreeKindExt as _};
-use rustc_type_ir::{ConstKind, RegionKind, TyKind, UnevaluatedConstKind};
+use rustc_hir::Safety;
+use rustc_middle::mir::Mutability;
+use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_type_ir::{BoundVarIndexKind, ConstKind, RegionKind, TyKind, UnevaluatedConstKind};
 
 use crate::term::{self, Term};
 use crate::translator::Translator;
@@ -131,6 +133,8 @@ impl<'tcx> Translator<'tcx> {
     }
 
     pub fn tconst(&self, c: ty::Const<'tcx>) -> Term {
+        use rustc_middle::ty::ValTreeKindExt as _;
+
         match c.kind() {
             ConstKind::Param(p) => term::app(
                 "CParam",
@@ -272,17 +276,17 @@ fn float_width(f: ty::FloatTy) -> Term {
     })
 }
 
-pub fn mutability(m: rustc_middle::mir::Mutability) -> Term {
+pub fn mutability(m: Mutability) -> Term {
     term::atom(match m {
-        rustc_middle::mir::Mutability::Mut => "Mut",
-        rustc_middle::mir::Mutability::Not => "Imm",
+        Mutability::Mut => "Mut",
+        Mutability::Not => "Imm",
     })
 }
 
-fn safety(s: rustc_hir::Safety) -> Term {
+pub fn safety(s: Safety) -> Term {
     term::atom(match s {
-        rustc_hir::Safety::Safe => "Safe",
-        rustc_hir::Safety::Unsafe => "Unsafe",
+        Safety::Safe => "Safe",
+        Safety::Unsafe => "Unsafe",
     })
 }
 
@@ -295,11 +299,9 @@ fn alias_kind(k: ty::AliasTyKind) -> Term {
     })
 }
 
-fn bound_depth(d: rustc_type_ir::BoundVarIndexKind) -> Term {
+fn bound_depth(d: BoundVarIndexKind) -> Term {
     match d {
-        rustc_type_ir::BoundVarIndexKind::Bound(i) => {
-            term::app("BdIndex", vec![term::nat(i.as_u32() as u64)])
-        }
-        rustc_type_ir::BoundVarIndexKind::Canonical => term::atom("BdCanonical"),
+        BoundVarIndexKind::Bound(i) => term::app("BdIndex", vec![term::nat(i.as_u32() as u64)]),
+        BoundVarIndexKind::Canonical => term::atom("BdCanonical"),
     }
 }

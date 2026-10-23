@@ -1,7 +1,8 @@
+use std::env;
 use std::path::PathBuf;
 
 pub fn sysroot() -> Option<String> {
-    if let Ok(path) = std::env::var("SYSROOT") {
+    if let Ok(path) = env::var("SYSROOT") {
         return Some(path);
     }
     Some(env!("RUST_ROCQ_SYSROOT").to_owned())

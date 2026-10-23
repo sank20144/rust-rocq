@@ -5,7 +5,7 @@ use rustc_middle::{mir, ty};
 
 use crate::term::{self, Term};
 use crate::translator::Translator;
-use crate::types::mutability;
+use crate::types;
 
 impl<'tcx> Translator<'tcx> {
     pub fn body(&self, def_id: DefId, name: &str, body: &mir::Body<'tcx>, borrowck: Term) -> Term {
@@ -26,7 +26,7 @@ impl<'tcx> Translator<'tcx> {
                         "LocalDecl",
                         vec![
                             self.ty(decl.ty),
-                            mutability(decl.mutability),
+                            types::mutability(decl.mutability),
                             term::option(names.get(&local).map(|n| term::string(n.clone()))),
                             self.span(decl.source_info.span),
                         ],
@@ -287,7 +287,7 @@ impl<'tcx> Translator<'tcx> {
             }
             Reborrow(t, m, p) => term::app(
                 "RReborrow",
-                vec![self.ty(*t), mutability(*m), self.place(p)],
+                vec![self.ty(*t), types::mutability(*m), self.place(p)],
             ),
         }
     }
@@ -318,7 +318,7 @@ impl<'tcx> Translator<'tcx> {
                 "AgCoroutineClosure",
                 vec![self.path(*def_id), self.generic_args(args)],
             ),
-            RawPtr(t, m) => term::app("AgRawPtr", vec![self.ty(*t), mutability(*m)]),
+            RawPtr(t, m) => term::app("AgRawPtr", vec![self.ty(*t), types::mutability(*m)]),
         }
     }
 
@@ -705,20 +705,13 @@ fn cast_kind(k: mir::CastKind) -> Term {
 fn pointer_coercion(pc: ty::adjustment::PointerCoercion) -> Term {
     use ty::adjustment::PointerCoercion::*;
     match pc {
-        ReifyFnPointer(s) => term::app("PcReifyFnPointer", vec![safety(s)]),
+        ReifyFnPointer(s) => term::app("PcReifyFnPointer", vec![types::safety(s)]),
         UnsafeFnPointer => term::atom("PcUnsafeFnPointer"),
-        ClosureFnPointer(s) => term::app("PcClosureFnPointer", vec![safety(s)]),
+        ClosureFnPointer(s) => term::app("PcClosureFnPointer", vec![types::safety(s)]),
         MutToConstPointer => term::atom("PcMutToConstPointer"),
         ArrayToPointer => term::atom("PcArrayToPointer"),
         Unsize => term::atom("PcUnsize"),
     }
-}
-
-fn safety(s: rustc_hir::Safety) -> Term {
-    term::atom(match s {
-        rustc_hir::Safety::Safe => "Safe",
-        rustc_hir::Safety::Unsafe => "Unsafe",
-    })
 }
 
 fn coercion_source(s: mir::CoercionSource) -> Term {

@@ -9,7 +9,9 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def_id::LocalDefId;
 use rustc_index::IndexVec;
 use rustc_middle::mir::{Body, Promoted};
-use rustc_middle::{queries, ty, util};
+use rustc_middle::queries::mir_borrowck::ProvidedValue;
+use rustc_middle::ty::TyCtxt;
+use rustc_middle::util::Providers;
 
 pub struct Facts<'tcx> {
     pub body: Body<'tcx>,
@@ -21,10 +23,7 @@ pub struct Facts<'tcx> {
 static BODIES: LazyLock<Mutex<HashMap<LocalDefId, Facts<'static>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-pub fn mir_borrowck(
-    tcx: ty::TyCtxt<'_>,
-    def_id: LocalDefId,
-) -> queries::mir_borrowck::ProvidedValue<'_> {
+pub fn mir_borrowck(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ProvidedValue<'_> {
     let bodies =
         consumers::get_bodies_with_borrowck_facts(tcx, def_id, ConsumerOptions::PoloniusInputFacts);
 
@@ -45,7 +44,7 @@ pub fn mir_borrowck(
     }
     drop(map);
 
-    let mut providers = util::Providers::default();
+    let mut providers = Providers::default();
     rustc_borrowck::provide(&mut providers.queries);
     (providers.queries.mir_borrowck)(tcx, def_id)
 }
@@ -57,7 +56,7 @@ pub fn collected() -> Vec<LocalDefId> {
     ids
 }
 
-pub fn retrieve<'tcx>(_tcx: ty::TyCtxt<'tcx>, def_id: LocalDefId) -> Option<&'tcx Facts<'tcx>> {
+pub fn retrieve<'tcx>(_tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> Option<&'tcx Facts<'tcx>> {
     let map = BODIES.lock().unwrap();
     unsafe { mem::transmute(map.get(&def_id)) }
 }
