@@ -45,7 +45,7 @@ impl<'tcx> Translator<'tcx> {
     }
 
     pub fn path(&self, def_id: DefId) -> Term {
-        term::string(self.tcx.def_path_str(def_id))
+        term::string(&self.tcx.def_path_str(def_id))
     }
 
     pub fn set_file(&self, file: String) {
@@ -89,7 +89,7 @@ impl<'tcx> Translator<'tcx> {
         if file == *self.file.borrow() {
             term::app("Span", args)
         } else {
-            args.insert(0, term::string(file));
+            args.insert(0, term::string(&file));
             term::app("SpanIn", args)
         }
     }

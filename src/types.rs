@@ -72,7 +72,7 @@ impl<'tcx> Translator<'tcx> {
             ),
             Param(p) => term::app(
                 "TParam",
-                vec![term::nat(p.index as u64), term::string(p.name.to_string())],
+                vec![term::nat(p.index as u64), term::string(p.name.as_str())],
             ),
             Bound(depth, b) => term::app(
                 "TBound",
@@ -113,11 +113,11 @@ impl<'tcx> Translator<'tcx> {
             }
             ReEarlyParam(p) => term::app(
                 "RParam",
-                vec![term::nat(p.index as u64), term::string(p.name.to_string())],
+                vec![term::nat(p.index as u64), term::string(p.name.as_str())],
             ),
             ReLateParam(p) => term::app(
                 "RParam",
-                vec![term::nat(0u32), term::string(format!("{:?}", p.kind))],
+                vec![term::nat(0), term::string(&format!("{:?}", p.kind))],
             ),
             ReBound(depth, br) => term::app(
                 "RBound",
@@ -142,7 +142,7 @@ impl<'tcx> Translator<'tcx> {
         match c.kind() {
             ConstKind::Param(p) => term::app(
                 "CParam",
-                vec![term::nat(p.index as u64), term::string(p.name.to_string())],
+                vec![term::nat(p.index as u64), term::string(p.name.as_str())],
             ),
             ConstKind::Value(v) => {
                 let t = self.ty(v.ty);
@@ -176,7 +176,7 @@ impl<'tcx> Translator<'tcx> {
             }
             ConstKind::Placeholder(p) => term::app(
                 "CError",
-                vec![term::string(format!("placeholder const {:?}", p))],
+                vec![term::string(&format!("placeholder const {:?}", p))],
             ),
             ConstKind::Expr(_) => term::app("CError", vec![term::string("const expr")]),
             ConstKind::Error(_) => term::app("CError", vec![term::string("const error")]),
@@ -213,7 +213,7 @@ impl<'tcx> Translator<'tcx> {
                 self.ty(signature_types.output()),
                 term::boolean(header.c_variadic()),
                 safety(header.safety()),
-                term::string(format!("{:?}", header.abi())),
+                term::string(&format!("{:?}", header.abi())),
             ],
         )
     }
@@ -236,7 +236,7 @@ impl<'tcx> Translator<'tcx> {
                                 ty::TermKind::Ty(t) => self.ty(t),
                                 ty::TermKind::Const(c) => term::app(
                                     "TError",
-                                    vec![term::string(self.type_const(c).render())],
+                                    vec![term::string(&self.type_const(c).render())],
                                 ),
                             },
                         ],

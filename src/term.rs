@@ -16,29 +16,28 @@ pub enum Term {
     Note(String, Box<Term>),
 }
 
-pub fn atom(s: impl Into<String>) -> Term {
-    Term::Atom(s.into())
+pub fn atom(name: &str) -> Term {
+    Term::Atom(name.to_owned())
 }
 
-pub fn app(head: impl Into<String>, args: Vec<Term>) -> Term {
-    let head = head.into();
+pub fn app(head: &str, args: Vec<Term>) -> Term {
     if args.is_empty() {
-        Term::Atom(head)
+        Term::Atom(head.to_owned())
     } else {
-        Term::App(head, args)
+        Term::App(head.to_owned(), args)
     }
 }
 
-pub fn string(s: impl Into<String>) -> Term {
-    Term::Str(s.into())
+pub fn string(text: &str) -> Term {
+    Term::Str(text.to_owned())
 }
 
-pub fn nat(n: impl Into<u128>) -> Term {
-    Term::Nat(n.into())
+pub fn nat(n: u64) -> Term {
+    Term::Nat(u128::from(n))
 }
 
-pub fn int(n: impl Into<i128>) -> Term {
-    Term::Int(n.into())
+pub fn int(n: i128) -> Term {
+    Term::Int(n)
 }
 
 pub fn bits(n: u128) -> Term {
@@ -69,8 +68,8 @@ pub fn option(t: Option<Term>) -> Term {
     }
 }
 
-pub fn note(label: impl Into<String>, t: Term) -> Term {
-    Term::Note(label.into(), Box::new(t))
+pub fn note(label: &str, t: Term) -> Term {
+    Term::Note(label.to_owned(), Box::new(t))
 }
 
 impl Term {
@@ -305,7 +304,7 @@ mod tests {
 
     #[test]
     fn lists_and_pairs_render_flat() {
-        let t = list(vec![pair(int(0), nat(1u32)), pair(int(-2), nat(3u32))]);
+        let t = list(vec![pair(int(0), nat(1)), pair(int(-2), nat(3))]);
         assert_eq!(t.render(), "[(0%Z, 1); ((-2)%Z, 3)]");
     }
 
@@ -316,10 +315,7 @@ mod tests {
 
     #[test]
     fn triples_render_as_rocq_tuples() {
-        assert_eq!(
-            triple(nat(1u32), nat(2u32), nat(3u32)).render(),
-            "(1, 2, 3)"
-        );
+        assert_eq!(triple(nat(1), nat(2), nat(3)).render(), "(1, 2, 3)");
     }
 
     #[test]
@@ -331,15 +327,15 @@ mod tests {
     fn notes_are_invisible_when_the_term_fits() {
         let t = app(
             "Body",
-            vec![note("name", string("f")), note("args", nat(2u32))],
+            vec![note("name", string("f")), note("args", nat(2))],
         );
         assert_eq!(t.render(), "Body \"f\" 2");
     }
 
     #[test]
     fn wide_terms_break_and_pick_up_their_labels() {
-        let wide = string("x".repeat(WIDTH));
-        let t = app("Body", vec![note("name", wide), note("args", nat(2u32))]);
+        let wide = string(&"x".repeat(WIDTH));
+        let t = app("Body", vec![note("name", wide), note("args", nat(2))]);
         let out = t.render();
         assert!(out.contains("(* name *)"), "{out}");
         assert!(out.contains("(* args *)"), "{out}");
@@ -348,9 +344,7 @@ mod tests {
 
     #[test]
     fn long_lists_break_one_element_per_line() {
-        let items: Vec<Term> = (0..40)
-            .map(|i| app("BasicBlock", vec![nat(i as u32)]))
-            .collect();
+        let items: Vec<Term> = (0..40).map(|i| app("BasicBlock", vec![nat(i)])).collect();
         let out = list(items).render();
         assert!(out.starts_with("[ BasicBlock 0\n"), "{out}");
         assert!(out.contains("\n; BasicBlock 1"), "{out}");

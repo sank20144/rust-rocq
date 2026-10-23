@@ -83,14 +83,14 @@ impl<'tcx> Translator<'tcx> {
                     .iter()
                     .map(|f| {
                         let t = self.tcx.type_of(f.did).skip_binder();
-                        term::pair(term::string(f.name.to_string()), self.ty(t))
+                        term::pair(term::string(f.name.as_str()), self.ty(t))
                     })
                     .collect();
                 term::app(
                     "VariantDef",
                     vec![
-                        term::string(v.name.to_string()),
-                        term::nat(index.as_u32()),
+                        term::string(v.name.as_str()),
+                        term::nat(u64::from(index.as_u32())),
                         term::bits(discriminant),
                         term::list(fields),
                     ],
@@ -110,11 +110,11 @@ impl<'tcx> Translator<'tcx> {
             reprs.push(term::string("packed"));
         }
         if let Some(int) = repr.int {
-            reprs.push(term::string(format!("{int:?}")));
+            reprs.push(term::string(&format!("{int:?}")));
         }
 
         term::note(
-            self.tcx.def_path_str(def_id),
+            &self.tcx.def_path_str(def_id),
             term::app(
                 "AdtDef",
                 vec![
@@ -130,7 +130,7 @@ impl<'tcx> Translator<'tcx> {
 
     fn trait_def(&self, def_id: DefId) -> Term {
         term::note(
-            self.tcx.def_path_str(def_id),
+            &self.tcx.def_path_str(def_id),
             term::app(
                 "TraitDef",
                 vec![
@@ -158,7 +158,7 @@ impl<'tcx> Translator<'tcx> {
             .collect();
 
         term::note(
-            self.tcx.def_path_str(def_id),
+            &self.tcx.def_path_str(def_id),
             term::app(
                 "ImplDef",
                 vec![
@@ -189,7 +189,7 @@ impl<'tcx> Translator<'tcx> {
                 term::app(
                     "AssocItem",
                     vec![
-                        term::string(item.opt_name().map_or_else(String::new, |n| n.to_string())),
+                        term::string(&item.opt_name().map_or_else(String::new, |n| n.to_string())),
                         self.path(item.def_id),
                         kind,
                         term::boolean(item.defaultness(self.tcx).has_value()),

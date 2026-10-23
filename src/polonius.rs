@@ -139,10 +139,6 @@ fn loan_ends(
     ends
 }
 
-fn id(value: impl Into<u32>) -> Id {
-    value.into()
-}
-
 pub fn annotations(facts: &Facts<'_>) -> Term {
     let (Some(input), Some(table)) = (facts.input_facts.as_deref(), facts.location_table.as_ref())
     else {
@@ -156,8 +152,8 @@ pub fn annotations(facts: &Facts<'_>) -> Term {
     let mut issued = LiveAt::new();
     for &(origin, loan, at) in &input.loan_issued_at {
         let at = point(at);
-        let loan = id(loan);
-        starts.insert((id(origin), loan, at));
+        let loan = u32::from(loan);
+        starts.insert((u32::from(origin), loan, at));
         issued.entry(at).or_default().insert(loan);
     }
 
@@ -169,7 +165,7 @@ pub fn annotations(facts: &Facts<'_>) -> Term {
     let killed: BTreeSet<_> = input
         .loan_killed_at
         .iter()
-        .map(|&(loan, at)| (id(loan), point(at)))
+        .map(|&(loan, at)| (u32::from(loan), point(at)))
         .collect();
 
     let mut ordinary = LiveAt::new();
@@ -177,7 +173,7 @@ pub fn annotations(facts: &Facts<'_>) -> Term {
         ordinary
             .entry(point(*at))
             .or_default()
-            .extend(loans.iter().copied().map(id));
+            .extend(loans.iter().copied().map(u32::from));
     }
 
     let mut origin_live = BTreeMap::<Point, IdSet>::new();
@@ -185,7 +181,7 @@ pub fn annotations(facts: &Facts<'_>) -> Term {
         origin_live
             .entry(point(*at))
             .or_default()
-            .extend(origins.iter().copied().map(id));
+            .extend(origins.iter().copied().map(u32::from));
     }
 
     let mut requires = RegionLoans::new();
@@ -195,9 +191,9 @@ pub fn annotations(facts: &Facts<'_>) -> Term {
             requires
                 .entry(at)
                 .or_default()
-                .entry(id(*origin))
+                .entry(u32::from(*origin))
                 .or_default()
-                .extend(loans.iter().copied().map(id));
+                .extend(loans.iter().copied().map(u32::from));
         }
     }
 
@@ -208,9 +204,9 @@ pub fn annotations(facts: &Facts<'_>) -> Term {
             subsets
                 .entry(at)
                 .or_default()
-                .entry(id(*origin))
+                .entry(u32::from(*origin))
                 .or_default()
-                .extend(targets.iter().copied().map(id));
+                .extend(targets.iter().copied().map(u32::from));
         }
     }
 
@@ -221,20 +217,25 @@ pub fn annotations(facts: &Facts<'_>) -> Term {
 
     let ends = loan_ends(&live, &edges);
 
-    let mut universal: Vec<_> = input.universal_region.iter().copied().map(id).collect();
+    let mut universal: Vec<_> = input
+        .universal_region
+        .iter()
+        .copied()
+        .map(u32::from)
+        .collect();
     universal.sort_unstable();
     universal.dedup();
     let mut placeholders: Vec<_> = input
         .placeholder
         .iter()
-        .map(|&(origin, loan)| (id(origin), id(loan)))
+        .map(|&(origin, loan)| (u32::from(origin), u32::from(loan)))
         .collect();
     placeholders.sort_unstable();
     placeholders.dedup();
     let mut known_subsets: Vec<_> = input
         .known_placeholder_subset
         .iter()
-        .map(|&(from, to)| (id(from), id(to)))
+        .map(|&(from, to)| (u32::from(from), u32::from(to)))
         .collect();
     known_subsets.sort_unstable();
     known_subsets.dedup();

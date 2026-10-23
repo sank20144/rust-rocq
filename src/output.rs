@@ -15,9 +15,9 @@ pub struct Output {
 }
 
 impl Output {
-    pub fn new(dir: impl Into<PathBuf>) -> Self {
+    pub fn new(dir: &Path) -> Self {
         Output {
-            dir: dir.into(),
+            dir: dir.to_path_buf(),
             entries: Vec::new(),
             adts: Vec::new(),
             traits: Vec::new(),
