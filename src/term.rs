@@ -5,7 +5,7 @@ const WIDTH: usize = 96;
 
 pub enum Term {
     Atom(String),
-    App(String, Vec<Term>),
+    App { head: String, args: Vec<Term> },
     List(Vec<Term>),
     Str(String),
     Nat(u128),
@@ -13,7 +13,13 @@ pub enum Term {
     Bits(u128),
     Bool(bool),
     Tuple(Vec<Term>),
-    Note(String, Box<Term>),
+    Note { label: String, term: Box<Term> },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Position {
+    Standalone,
+    Argument,
 }
 
 pub fn atom(name: &str) -> Term {
@@ -24,7 +30,10 @@ pub fn app(head: &str, args: Vec<Term>) -> Term {
     if args.is_empty() {
         Term::Atom(head.to_owned())
     } else {
-        Term::App(head.to_owned(), args)
+        Term::App {
+            head: head.to_owned(),
+            args,
+        }
     }
 }
 
@@ -64,12 +73,18 @@ pub fn triple(a: Term, b: Term, c: Term) -> Term {
 pub fn option(t: Option<Term>) -> Term {
     match t {
         None => Term::Atom("None".to_owned()),
-        Some(t) => Term::App("Some".to_owned(), vec![t]),
+        Some(t) => Term::App {
+            head: "Some".to_owned(),
+            args: vec![t],
+        },
     }
 }
 
 pub fn note(label: &str, t: Term) -> Term {
-    Term::Note(label.to_owned(), Box::new(t))
+    Term::Note {
+        label: label.to_owned(),
+        term: Box::new(t),
+    }
 }
 
 impl Term {
@@ -78,7 +93,7 @@ impl Term {
             Term::Atom(atom) => {
                 heads.insert(atom.clone());
             }
-            Term::App(head, args) => {
+            Term::App { head, args } => {
                 heads.insert(head.clone());
                 for arg in args {
                     arg.collect_heads(heads);
@@ -89,7 +104,7 @@ impl Term {
                     item.collect_heads(heads);
                 }
             }
-            Term::Note(_, term) => term.collect_heads(heads),
+            Term::Note { term, .. } => term.collect_heads(heads),
             Term::Str(_) | Term::Nat(_) | Term::Int(_) | Term::Bits(_) | Term::Bool(_) => {}
         }
     }
@@ -100,14 +115,14 @@ impl Term {
 
     pub fn render_at(&self, indent: usize) -> String {
         let mut out = String::new();
-        self.write(&mut out, indent, false);
+        self.write(&mut out, indent, Position::Standalone);
         out
     }
 
     fn width(&self) -> usize {
         match self {
             Term::Atom(s) => s.len(),
-            Term::App(head, args) => {
+            Term::App { head, args } => {
                 head.len() + args.iter().map(|a| 1 + a.width() + 2).sum::<usize>()
             }
             Term::List(items) | Term::Tuple(items) => {
@@ -124,33 +139,33 @@ impl Term {
                     5
                 }
             }
-            Term::Note(_, t) => t.width(),
+            Term::Note { term: t, .. } => t.width(),
         }
     }
 
-    fn write(&self, out: &mut String, indent: usize, nested: bool) {
+    fn write(&self, out: &mut String, indent: usize, position: Position) {
         if self.width() + indent <= WIDTH {
-            self.write_flat(out, nested);
+            self.write_flat(out, position);
         } else {
-            self.write_broken(out, indent, nested);
+            self.write_broken(out, indent, position);
         }
     }
 
-    fn write_flat(&self, out: &mut String, nested: bool) {
+    fn write_flat(&self, out: &mut String, position: Position) {
         use std::fmt::Write as _;
 
         match self {
             Term::Atom(s) => out.push_str(s),
-            Term::App(head, args) => {
-                if nested {
+            Term::App { head, args } => {
+                if position == Position::Argument {
                     out.push('(');
                 }
                 out.push_str(head);
                 for a in args {
                     out.push(' ');
-                    a.write_flat(out, true);
+                    a.write_flat(out, Position::Argument);
                 }
-                if nested {
+                if position == Position::Argument {
                     out.push(')');
                 }
             }
@@ -160,7 +175,7 @@ impl Term {
                     if i > 0 {
                         out.push_str("; ");
                     }
-                    item.write_flat(out, false);
+                    item.write_flat(out, Position::Standalone);
                 }
                 out.push(']');
             }
@@ -170,7 +185,7 @@ impl Term {
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    item.write_flat(out, false);
+                    item.write_flat(out, Position::Standalone);
                 }
                 out.push(')');
             }
@@ -189,38 +204,38 @@ impl Term {
                 }
             }
             Term::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-            Term::Note(_, t) => t.write_flat(out, nested),
+            Term::Note { term: t, .. } => t.write_flat(out, position),
         }
     }
 
-    fn write_broken(&self, out: &mut String, indent: usize, nested: bool) {
+    fn write_broken(&self, out: &mut String, indent: usize, position: Position) {
         use std::fmt::Write as _;
 
         let inner = indent + 2;
         match self {
-            Term::App(head, args) => {
-                if nested {
+            Term::App { head, args } => {
+                if position == Position::Argument {
                     out.push('(');
                 }
                 out.push_str(head);
                 for a in args {
                     out.push('\n');
                     pad(out, inner);
-                    if let Term::Note(label, t) = a {
+                    if let Term::Note { label, term: t } = a {
                         let tagged = inner + label.len() + 7;
                         if t.width() + tagged <= WIDTH {
                             let _ = write!(out, "(* {label} *) ");
-                            t.write_flat(out, true);
+                            t.write_flat(out, Position::Argument);
                         } else {
                             let _ = write!(out, "(* {label} *)\n");
                             pad(out, inner);
-                            t.write(out, inner, true);
+                            t.write(out, inner, Position::Argument);
                         }
                     } else {
-                        a.write(out, inner, true);
+                        a.write(out, inner, Position::Argument);
                     }
                 }
-                if nested {
+                if position == Position::Argument {
                     out.push(')');
                 }
             }
@@ -232,12 +247,12 @@ impl Term {
                         pad(out, indent);
                         out.push_str("; ");
                     }
-                    if let Term::Note(label, t) = item {
+                    if let Term::Note { label, term: t } = item {
                         let _ = write!(out, "(* {label} *)\n");
                         pad(out, inner);
-                        t.write(out, inner, false);
+                        t.write(out, inner, Position::Standalone);
                     } else {
-                        item.write(out, inner, false);
+                        item.write(out, inner, Position::Standalone);
                     }
                 }
                 out.push('\n');
@@ -252,15 +267,15 @@ impl Term {
                         out.push('\n');
                         pad(out, inner);
                     }
-                    item.write(out, inner, false);
+                    item.write(out, inner, Position::Standalone);
                 }
                 out.push(')');
             }
-            Term::Note(label, t) => {
+            Term::Note { label, term: t } => {
                 let _ = write!(out, "(* {label} *) ");
-                t.write(out, indent, nested);
+                t.write(out, indent, position);
             }
-            leaf => leaf.write_flat(out, nested),
+            leaf => leaf.write_flat(out, position),
         }
     }
 }

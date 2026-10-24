@@ -10,29 +10,31 @@ type Id = u32;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Point {
-    Start(Id, usize),
-    Mid(Id, usize),
+    Start { block: Id, statement: usize },
+    Mid { block: Id, statement: usize },
 }
 
 impl Point {
     fn from_rich(value: RichLocation) -> Self {
         match value {
-            RichLocation::Start(location) => {
-                Self::Start(location.block.as_u32(), location.statement_index)
-            }
-            RichLocation::Mid(location) => {
-                Self::Mid(location.block.as_u32(), location.statement_index)
-            }
+            RichLocation::Start(location) => Self::Start {
+                block: location.block.as_u32(),
+                statement: location.statement_index,
+            },
+            RichLocation::Mid(location) => Self::Mid {
+                block: location.block.as_u32(),
+                statement: location.statement_index,
+            },
         }
     }
 
     fn term(self) -> Term {
         match self {
-            Self::Start(block, statement) => term::app(
+            Self::Start { block, statement } => term::app(
                 "PtStart",
                 vec![term::nat(block as u64), term::nat(statement as u64)],
             ),
-            Self::Mid(block, statement) => term::app(
+            Self::Mid { block, statement } => term::app(
                 "PtMid",
                 vec![term::nat(block as u64), term::nat(statement as u64)],
             ),
@@ -318,7 +320,10 @@ mod tests {
     use super::*;
 
     fn p(n: Id) -> Point {
-        Point::Start(0, n as usize)
+        Point::Start {
+            block: 0,
+            statement: n as usize,
+        }
     }
 
     #[test]
