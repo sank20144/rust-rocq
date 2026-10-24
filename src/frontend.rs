@@ -105,6 +105,7 @@ impl Callbacks for Frontend {
 }
 
 impl Frontend {
+    #[must_use]
     fn finished(&self) -> Compilation {
         if self.continue_compilation {
             Compilation::Continue
@@ -114,6 +115,7 @@ impl Frontend {
     }
 }
 
+#[must_use]
 fn render_mir<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>) -> String {
     let mut buffer = Vec::new();
     let writer = MirWriter::new(tcx);

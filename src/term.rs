@@ -3,6 +3,7 @@ use std::iter;
 
 const WIDTH: usize = 96;
 
+#[must_use]
 pub enum Term {
     Atom(String),
     App { head: String, args: Vec<Term> },
@@ -109,16 +110,19 @@ impl Term {
         }
     }
 
+    #[must_use]
     pub fn render(&self) -> String {
         self.render_at(0)
     }
 
+    #[must_use]
     pub fn render_at(&self, indent: usize) -> String {
         let mut out = String::new();
         self.write(&mut out, indent, Position::Standalone);
         out
     }
 
+    #[must_use]
     fn width(&self) -> usize {
         match self {
             Term::Atom(s) => s.len(),
@@ -298,6 +302,7 @@ fn write_string(out: &mut String, s: &str) {
     out.push('"');
 }
 
+#[must_use]
 fn digits(n: u128) -> usize {
     if n == 0 {
         1

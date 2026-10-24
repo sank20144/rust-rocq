@@ -14,8 +14,8 @@ enum Point {
     Mid { block: Id, statement: usize },
 }
 
-impl Point {
-    fn from_rich(value: RichLocation) -> Self {
+impl From<RichLocation> for Point {
+    fn from(value: RichLocation) -> Self {
         match value {
             RichLocation::Start(location) => Self::Start {
                 block: location.block.as_u32(),
@@ -27,8 +27,10 @@ impl Point {
             },
         }
     }
+}
 
-    fn term(self) -> Term {
+impl Point {
+    fn to_term(self) -> Term {
         match self {
             Self::Start { block, statement } => term::app(
                 "PtStart",
@@ -48,6 +50,7 @@ type LiveAt = BTreeMap<Point, IdSet>;
 type RegionLoans = BTreeMap<Point, BTreeMap<Id, IdSet>>;
 type RegionSubsets = BTreeMap<Point, BTreeMap<Id, IdSet>>;
 
+#[must_use]
 fn zombie_loans(
     requires: &RegionLoans,
     killed: &BTreeSet<(Id, Point)>,
@@ -119,6 +122,7 @@ fn add_live(into: &mut LiveAt, from: &LiveAt) {
     }
 }
 
+#[must_use]
 fn loan_ends(
     live: &LiveAt,
     edges: &BTreeSet<(Point, Point)>,
@@ -151,7 +155,7 @@ pub fn annotations(facts: &Facts<'_>) -> Term {
     };
 
     let output = Output::compute(input, Algorithm::Naive, true);
-    let point = |p| Point::from_rich(table.to_rich_location(p));
+    let point = |p| Point::from(table.to_rich_location(p));
 
     let mut starts: BTreeSet<(Id, Id, Point)> = BTreeSet::new();
     let mut issued = LiveAt::new();
@@ -278,7 +282,11 @@ pub fn annotations(facts: &Facts<'_>) -> Term {
                         .map(|(origin, loan, at)| {
                             term::app(
                                 "LoanStart",
-                                vec![term::nat(origin as u64), term::nat(loan as u64), at.term()],
+                                vec![
+                                    term::nat(origin as u64),
+                                    term::nat(loan as u64),
+                                    at.to_term(),
+                                ],
                             )
                         })
                         .collect(),
@@ -293,8 +301,8 @@ pub fn annotations(facts: &Facts<'_>) -> Term {
                                 "LoanEnd",
                                 vec![
                                     term::nat(loan as u64),
-                                    from.term(),
-                                    term::option(to.map(Point::term)),
+                                    from.to_term(),
+                                    term::option(to.map(Point::to_term)),
                                 ],
                             )
                         })

@@ -52,6 +52,7 @@ impl<'tcx> Translator<'tcx> {
         *self.file.borrow_mut() = file;
     }
 
+    #[must_use]
     pub fn span_file(&self, span: Span) -> String {
         let source_map = self.tcx.sess.source_map();
         match source_map.lookup_line(span.lo()) {

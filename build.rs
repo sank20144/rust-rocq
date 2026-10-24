@@ -2,6 +2,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::Command;
 
+#[must_use]
 fn command_output(program: &PathBuf, args: &[&str]) -> String {
     let output = Command::new(program)
         .args(args)

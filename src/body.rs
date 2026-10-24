@@ -619,6 +619,7 @@ impl<'tcx> Translator<'tcx> {
     }
 }
 
+#[must_use]
 fn debug_names(body: &mir::Body<'_>) -> BTreeMap<mir::Local, String> {
     let mut out = BTreeMap::new();
     for info in &body.var_debug_info {

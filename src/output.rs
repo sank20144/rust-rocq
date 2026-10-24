@@ -45,6 +45,7 @@ impl Output {
         self.adts.extend(adts);
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
             && self.adts.is_empty()
@@ -156,6 +157,7 @@ impl Output {
     }
 }
 
+#[must_use]
 fn identifier(path: &str) -> String {
     let mut s: String = path
         .chars()
@@ -172,6 +174,7 @@ fn identifier(path: &str) -> String {
     }
 }
 
+#[must_use]
 fn unique(base: &str, taken: &[String]) -> String {
     if !taken.iter().any(|t| t == base) {
         return base.to_owned();
@@ -179,9 +182,10 @@ fn unique(base: &str, taken: &[String]) -> String {
     (1..)
         .map(|n| format!("{base}_{n}"))
         .find(|c| !taken.contains(c))
-        .unwrap()
+        .expect("an unbounded counter always reaches a free suffix")
 }
 
+#[must_use]
 pub fn source_name(path: &Path) -> String {
     path.file_name()
         .map_or_else(|| "input".to_owned(), |n| n.to_string_lossy().into_owned())

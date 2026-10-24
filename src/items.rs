@@ -11,6 +11,7 @@ pub struct Items {
     pub impls: Vec<Term>,
 }
 
+#[must_use]
 pub fn collect(translator: &Translator<'_>) -> Items {
     let mut items = Items {
         adts: Vec::new(),
@@ -37,6 +38,7 @@ pub fn collect(translator: &Translator<'_>) -> Items {
     items
 }
 
+#[must_use]
 pub fn external_adts(translator: &Translator<'_>) -> Vec<Term> {
     let mut done: Vec<DefId> = Vec::new();
     let mut adts = Vec::new();

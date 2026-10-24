@@ -30,7 +30,9 @@ pub fn mir_borrowck(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ProvidedValue<'_> {
     let bodies: FxHashMap<LocalDefId, BodyWithBorrowckFacts<'static>> =
         unsafe { mem::transmute(bodies) };
 
-    let mut map = BODIES.lock().unwrap();
+    let mut map = BODIES
+        .lock()
+        .expect("no code panics while holding the body store lock");
     for (def_id, facts) in bodies {
         map.insert(
             def_id,
@@ -49,14 +51,20 @@ pub fn mir_borrowck(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ProvidedValue<'_> {
     (providers.queries.mir_borrowck)(tcx, def_id)
 }
 
+#[must_use]
 pub fn collected() -> Vec<LocalDefId> {
-    let map = BODIES.lock().unwrap();
+    let map = BODIES
+        .lock()
+        .expect("no code panics while holding the body store lock");
     let mut ids: Vec<LocalDefId> = map.keys().copied().collect();
     ids.sort_by_key(|id| id.local_def_index.as_u32());
     ids
 }
 
+#[must_use]
 pub fn retrieve<'tcx>(_tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> Option<&'tcx Facts<'tcx>> {
-    let map = BODIES.lock().unwrap();
+    let map = BODIES
+        .lock()
+        .expect("no code panics while holding the body store lock");
     unsafe { mem::transmute(map.get(&def_id)) }
 }

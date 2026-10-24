@@ -1,10 +1,12 @@
 use std::env;
 use std::path::PathBuf;
 
+#[must_use]
 pub fn sysroot() -> String {
     env::var("SYSROOT").unwrap_or_else(|_| env!("RUST_ROCQ_SYSROOT").to_owned())
 }
 
+#[must_use]
 pub fn without_incremental(args: Vec<String>) -> Vec<String> {
     let mut filtered = Vec::with_capacity(args.len());
     let mut args = args.into_iter();
@@ -27,6 +29,7 @@ pub fn without_incremental(args: Vec<String>) -> Vec<String> {
     filtered
 }
 
+#[must_use]
 fn option_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     for (i, arg) in args.iter().enumerate() {
         if arg == name {
@@ -39,6 +42,7 @@ fn option_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     None
 }
 
+#[must_use]
 fn codegen_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     let prefix = format!("{name}=");
     for (i, arg) in args.iter().enumerate() {
@@ -57,6 +61,7 @@ fn codegen_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     None
 }
 
+#[must_use]
 fn path_component(value: &str) -> String {
     let component: String = value
         .chars()
@@ -75,6 +80,7 @@ fn path_component(value: &str) -> String {
     }
 }
 
+#[must_use]
 pub fn cargo_output_dir(base: PathBuf, args: &[String]) -> PathBuf {
     let crate_name = option_value(args, "--crate-name").unwrap_or("crate");
     let metadata = codegen_value(args, "metadata").unwrap_or("default");
