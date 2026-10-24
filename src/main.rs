@@ -52,10 +52,8 @@ fn main() -> ExitCode {
         }
     }
 
-    if translate {
-        if !args.iter().any(|a| a.starts_with("-Zverbose-internals")) {
-            args.push("-Zverbose-internals".to_owned());
-        }
+    if translate && !args.iter().any(|a| a.starts_with("-Zverbose-internals")) {
+        args.push("-Zverbose-internals".to_owned());
     }
 
     if !args.iter().any(|a| a.starts_with("--sysroot")) {

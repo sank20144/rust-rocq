@@ -233,7 +233,7 @@ impl Term {
                             let _ = write!(out, "(* {label} *) ");
                             t.write_flat(out, Position::Argument);
                         } else {
-                            let _ = write!(out, "(* {label} *)\n");
+                            let _ = writeln!(out, "(* {label} *)");
                             pad(out, inner);
                             t.write(out, inner, Position::Argument);
                         }
@@ -254,7 +254,7 @@ impl Term {
                         out.push_str("; ");
                     }
                     if let Term::Note { label, term: t } = item {
-                        let _ = write!(out, "(* {label} *)\n");
+                        let _ = writeln!(out, "(* {label} *)");
                         pad(out, inner);
                         t.write(out, inner, Position::Standalone);
                     } else {

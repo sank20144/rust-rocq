@@ -1,9 +1,10 @@
 use std::env;
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[must_use]
-fn command_output(program: &PathBuf, args: &[&str]) -> String {
+fn command_output(program: &Path, args: &[&str]) -> String {
     let output = Command::new(program)
         .args(args)
         .output()
@@ -21,8 +22,8 @@ fn command_output(program: &PathBuf, args: &[&str]) -> String {
 }
 
 fn main() {
-    let rustc = PathBuf::from(env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()));
-    let cargo = PathBuf::from(env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    let rustc = PathBuf::from(env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc")));
+    let cargo = PathBuf::from(env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo")));
 
     println!("cargo:rustc-env=RUST_ROCQ_CARGO={}", cargo.display());
     println!(

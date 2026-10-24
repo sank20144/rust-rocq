@@ -85,13 +85,13 @@ impl Output {
 
         let mut out = String::new();
         out.push_str(&banner);
-        out.push_str(&format!(
+        out.push_str(
             "\n\
              From RustRocq Require Import Syntax.\n\
              From Stdlib Require Import String List ZArith.\n\
              Import ListNotations.\n\
-             Local Open Scope string_scope.\n\n"
-        ));
+             Local Open Scope string_scope.\n\n",
+        );
         let _ = source;
 
         let adts = Term::List(mem::take(&mut self.adts));
