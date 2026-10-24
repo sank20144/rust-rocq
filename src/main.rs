@@ -59,10 +59,8 @@ fn main() -> ExitCode {
     }
 
     if !args.iter().any(|a| a.starts_with("--sysroot")) {
-        if let Some(path) = arguments::sysroot() {
-            args.push("--sysroot".to_owned());
-            args.push(path);
-        }
+        args.push("--sysroot".to_owned());
+        args.push(arguments::sysroot());
     }
 
     rustc_driver::catch_with_exit_code(|| {

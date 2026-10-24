@@ -9,7 +9,8 @@ use crate::types;
 
 impl<'tcx> Translator<'tcx> {
     pub fn body(&self, def_id: DefId, name: &str, body: &mir::Body<'tcx>, borrowck: Term) -> Term {
-        self.set_file(self.span_file(body.span));
+        let file = self.span_file(body.span);
+        self.set_file(file.clone());
         let names = debug_names(body);
 
         let locals: Vec<Term> = body
@@ -69,7 +70,7 @@ impl<'tcx> Translator<'tcx> {
             "Body",
             vec![
                 term::note("name", term::string(name)),
-                term::note("file", term::string(&self.file())),
+                term::note("file", term::string(&file)),
                 term::note("span", self.span(body.span)),
                 term::note("generics", self.generics(def_id)),
                 term::note("bounds", self.bounds(def_id)),

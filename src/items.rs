@@ -1,5 +1,5 @@
 use rustc_hir::def::DefKind;
-use rustc_hir::def_id::DefId;
+use rustc_hir::def_id::{DefId, LocalDefId};
 use rustc_middle::ty;
 
 use crate::term::{self, Term};
@@ -18,7 +18,7 @@ pub fn collect(translator: &Translator<'_>) -> Items {
         impls: Vec::new(),
     };
 
-    let mut ids: Vec<_> = translator.tcx.hir_crate_items(()).definitions().collect();
+    let mut ids: Vec<LocalDefId> = translator.tcx.hir_crate_items(()).definitions().collect();
     ids.sort_by_key(|id| id.local_def_index.as_u32());
 
     for local in ids {
@@ -41,11 +41,12 @@ pub fn external_adts(translator: &Translator<'_>) -> Vec<Term> {
     let mut done: Vec<DefId> = Vec::new();
     let mut adts = Vec::new();
     loop {
-        let pending: Vec<DefId> = translator
-            .adts_seen()
-            .into_iter()
-            .filter(|id| !id.is_local() && !done.contains(id))
-            .collect();
+        let pending: Vec<DefId> = translator.with_adts_seen(|seen| {
+            seen.iter()
+                .copied()
+                .filter(|id| !id.is_local() && !done.contains(id))
+                .collect()
+        });
         if pending.is_empty() {
             break;
         }

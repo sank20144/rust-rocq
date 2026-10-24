@@ -55,7 +55,7 @@ fn zombie_loans(
     origin_live: &BTreeMap<Point, IdSet>,
     subsets: &RegionSubsets,
 ) -> LiveAt {
-    let mut zombie_requires = BTreeSet::<(Id, Id, Point)>::new();
+    let mut zombie_requires: BTreeSet<(Id, Id, Point)> = BTreeSet::new();
 
     for &(loan, point) in killed {
         let Some(regions) = requires.get(&point) else {
@@ -65,7 +65,8 @@ fn zombie_loans(
             if !loans.contains(&loan) {
                 continue;
             }
-            for &(_, target) in edges.iter().filter(|(source, _)| *source == point) {
+            let successors = edges.iter().filter(|(source, _)| *source == point);
+            for &(_, target) in successors {
                 if origin_live
                     .get(&target)
                     .is_some_and(|live| live.contains(&region))
@@ -78,14 +79,15 @@ fn zombie_loans(
 
     loop {
         let mut changed = false;
-        let current: Vec<_> = zombie_requires.iter().copied().collect();
+        let current: Vec<(Id, Id, Point)> = zombie_requires.iter().copied().collect();
         for (region, loan, point) in current {
             if let Some(targets) = subsets.get(&point).and_then(|at| at.get(&region)) {
                 for &target_region in targets {
                     changed |= zombie_requires.insert((target_region, loan, point));
                 }
             }
-            for &(_, target) in edges.iter().filter(|(source, _)| *source == point) {
+            let successors = edges.iter().filter(|(source, _)| *source == point);
+            for &(_, target) in successors {
                 if origin_live
                     .get(&target)
                     .is_some_and(|live| live.contains(&region))
@@ -121,11 +123,12 @@ fn loan_ends(
     live: &LiveAt,
     edges: &BTreeSet<(Point, Point)>,
 ) -> BTreeSet<(Id, Point, Option<Point>)> {
+    let nothing_live = IdSet::new();
     let mut ends = BTreeSet::new();
     for &(from, to) in edges {
-        let from_live = live.get(&from).cloned().unwrap_or_default();
-        let to_live = live.get(&to).cloned().unwrap_or_default();
-        for loan in from_live.difference(&to_live) {
+        let from_live = live.get(&from).unwrap_or(&nothing_live);
+        let to_live = live.get(&to).unwrap_or(&nothing_live);
+        for loan in from_live.difference(to_live) {
             ends.insert((*loan, from, Some(to)));
         }
     }
@@ -150,7 +153,7 @@ pub fn annotations(facts: &Facts<'_>) -> Term {
     let output = Output::compute(input, Algorithm::Naive, true);
     let point = |p| Point::from_rich(table.to_rich_location(p));
 
-    let mut starts = BTreeSet::new();
+    let mut starts: BTreeSet<(Id, Id, Point)> = BTreeSet::new();
     let mut issued = LiveAt::new();
     for &(origin, loan, at) in &input.loan_issued_at {
         let at = point(at);
@@ -159,12 +162,12 @@ pub fn annotations(facts: &Facts<'_>) -> Term {
         issued.entry(at).or_default().insert(loan);
     }
 
-    let edges: BTreeSet<_> = input
+    let edges: BTreeSet<(Point, Point)> = input
         .cfg_edge
         .iter()
         .map(|&(from, to)| (point(from), point(to)))
         .collect();
-    let killed: BTreeSet<_> = input
+    let killed: BTreeSet<(Id, Point)> = input
         .loan_killed_at
         .iter()
         .map(|&(loan, at)| (u32::from(loan), point(at)))
@@ -178,7 +181,7 @@ pub fn annotations(facts: &Facts<'_>) -> Term {
             .extend(loans.iter().copied().map(u32::from));
     }
 
-    let mut origin_live = BTreeMap::<Point, IdSet>::new();
+    let mut origin_live: BTreeMap<Point, IdSet> = BTreeMap::new();
     for (at, origins) in &output.origin_live_on_entry {
         origin_live
             .entry(point(*at))
@@ -219,7 +222,7 @@ pub fn annotations(facts: &Facts<'_>) -> Term {
 
     let ends = loan_ends(&live, &edges);
 
-    let mut universal: Vec<_> = input
+    let mut universal: Vec<Id> = input
         .universal_region
         .iter()
         .copied()
@@ -227,14 +230,14 @@ pub fn annotations(facts: &Facts<'_>) -> Term {
         .collect();
     universal.sort_unstable();
     universal.dedup();
-    let mut placeholders: Vec<_> = input
+    let mut placeholders: Vec<(Id, Id)> = input
         .placeholder
         .iter()
         .map(|&(origin, loan)| (u32::from(origin), u32::from(loan)))
         .collect();
     placeholders.sort_unstable();
     placeholders.dedup();
-    let mut known_subsets: Vec<_> = input
+    let mut known_subsets: Vec<(Id, Id)> = input
         .known_placeholder_subset
         .iter()
         .map(|&(from, to)| (u32::from(from), u32::from(to)))

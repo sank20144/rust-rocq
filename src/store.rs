@@ -51,7 +51,7 @@ pub fn mir_borrowck(tcx: TyCtxt<'_>, def_id: LocalDefId) -> ProvidedValue<'_> {
 
 pub fn collected() -> Vec<LocalDefId> {
     let map = BODIES.lock().unwrap();
-    let mut ids: Vec<_> = map.keys().copied().collect();
+    let mut ids: Vec<LocalDefId> = map.keys().copied().collect();
     ids.sort_by_key(|id| id.local_def_index.as_u32());
     ids
 }

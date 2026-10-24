@@ -1,11 +1,8 @@
 use std::env;
 use std::path::PathBuf;
 
-pub fn sysroot() -> Option<String> {
-    if let Ok(path) = env::var("SYSROOT") {
-        return Some(path);
-    }
-    Some(env!("RUST_ROCQ_SYSROOT").to_owned())
+pub fn sysroot() -> String {
+    env::var("SYSROOT").unwrap_or_else(|_| env!("RUST_ROCQ_SYSROOT").to_owned())
 }
 
 pub fn without_incremental(args: Vec<String>) -> Vec<String> {
@@ -30,31 +27,31 @@ pub fn without_incremental(args: Vec<String>) -> Vec<String> {
     filtered
 }
 
-fn option_value(args: &[String], name: &str) -> Option<String> {
+fn option_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     for (i, arg) in args.iter().enumerate() {
         if arg == name {
-            return args.get(i + 1).cloned();
+            return args.get(i + 1).map(String::as_str);
         }
         if let Some(value) = arg.strip_prefix(&format!("{name}=")) {
-            return Some(value.to_owned());
+            return Some(value);
         }
     }
     None
 }
 
-fn codegen_value(args: &[String], name: &str) -> Option<String> {
+fn codegen_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     let prefix = format!("{name}=");
     for (i, arg) in args.iter().enumerate() {
         if arg == "-C" || arg == "--codegen" {
             if let Some(value) = args.get(i + 1).and_then(|v| v.strip_prefix(&prefix)) {
-                return Some(value.to_owned());
+                return Some(value);
             }
         }
         if let Some(value) = arg.strip_prefix(&format!("-C{prefix}")) {
-            return Some(value.to_owned());
+            return Some(value);
         }
         if let Some(value) = arg.strip_prefix(&format!("--codegen={prefix}")) {
-            return Some(value.to_owned());
+            return Some(value);
         }
     }
     None
@@ -79,10 +76,10 @@ fn path_component(value: &str) -> String {
 }
 
 pub fn cargo_output_dir(base: PathBuf, args: &[String]) -> PathBuf {
-    let crate_name = option_value(args, "--crate-name").unwrap_or_else(|| "crate".to_owned());
-    let metadata = codegen_value(args, "metadata").unwrap_or_else(|| "default".to_owned());
-    base.join(path_component(&crate_name))
-        .join(path_component(&metadata))
+    let crate_name = option_value(args, "--crate-name").unwrap_or("crate");
+    let metadata = codegen_value(args, "metadata").unwrap_or("default");
+    base.join(path_component(crate_name))
+        .join(path_component(metadata))
 }
 
 #[cfg(test)]

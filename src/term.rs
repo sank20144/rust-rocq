@@ -123,10 +123,12 @@ impl Term {
         match self {
             Term::Atom(s) => s.len(),
             Term::App { head, args } => {
-                head.len() + args.iter().map(|a| 1 + a.width() + 2).sum::<usize>()
+                let args_width: usize = args.iter().map(|a| 1 + a.width() + 2).sum();
+                head.len() + args_width
             }
             Term::List(items) | Term::Tuple(items) => {
-                2 + items.iter().map(Term::width).sum::<usize>() + 2 * items.len().saturating_sub(1)
+                let items_width: usize = items.iter().map(Term::width).sum();
+                2 + items_width + 2 * items.len().saturating_sub(1)
             }
             Term::Str(s) => s.len() + s.matches('"').count() + 2,
             Term::Nat(n) => digits(*n),

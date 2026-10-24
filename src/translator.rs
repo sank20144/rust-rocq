@@ -30,8 +30,8 @@ impl<'tcx> Translator<'tcx> {
         taken.into_iter().map(u64::from).collect()
     }
 
-    pub fn adts_seen(&self) -> Vec<DefId> {
-        self.adts_seen.borrow().clone()
+    pub fn with_adts_seen<R>(&self, f: impl FnOnce(&[DefId]) -> R) -> R {
+        f(&self.adts_seen.borrow())
     }
 
     pub fn record_adt(&self, def_id: DefId) {
@@ -50,10 +50,6 @@ impl<'tcx> Translator<'tcx> {
 
     pub fn set_file(&self, file: String) {
         *self.file.borrow_mut() = file;
-    }
-
-    pub fn file(&self) -> String {
-        self.file.borrow().clone()
     }
 
     pub fn span_file(&self, span: Span) -> String {
